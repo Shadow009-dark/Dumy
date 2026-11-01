@@ -1,0 +1,60 @@
+{
+  "ollama_url": "http://localhost:11434",
+  "models": {
+    "embed": "bge-m3",
+    "helper": "qwen2.5:3b",
+    "draft": "qwen2.5:7b",
+    "selfcheck": "qwen2.5:7b"
+  },
+  "fallback_model": "llama3.1:8b",
+  "model_fallbacks": [
+    "llama3.1:8b",
+    "qwen3:8b",
+    "qwen2.5:7b"
+  ],
+  "chunk_size": 650,
+  "chunk_overlap": 100,
+  "top_k_simple": 6,
+  "top_k_broad": 12,
+  "pdf_folder": "pdfs",
+  "pdf_extra_folders": [],
+  "data_folder": "data",
+  "host": "127.0.0.1",
+  "port": 8085,
+  "web_folder": "web",
+  "open_browser": true,
+  "allow_upload_from_remote": false,
+  "upload_max_mb": 200,
+  "web_search_enabled": true,
+  "searxng_url": "http://localhost:8080",
+  "search_languages": [
+    "az",
+    "en"
+  ],
+  "web_top_results": 8,
+  "web_max_pages": 6,
+  "web_fetch_timeout": 10,
+  "web_cache_ttl_hours": 168,
+  "trusted_domains": [
+    "fao.org",
+    "woah.org",
+    "merckvetmanual.com",
+    ".edu",
+    ".gov",
+    "gov.az",
+    "edu.az",
+    "usda.gov",
+    "europa.eu"
+  ],
+  "fast_mode": false,
+  "request_timeout": 300,
+  "max_history_messages": 8,
+  "rerank_top_n": 8,
+  "num_ctx": 8192,
+  "num_predict_draft": 1000,
+  "context_budget_tokens": 5892,
+  "keep_alive": "30m",
+  "auto_ingest": true,
+  "ocr_enabled": false,
+  "ocr_languages": "aze+eng"
+}

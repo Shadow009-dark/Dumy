@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DUMY – Heyvandarlıq köməkçisi</title>
+<style>
+  :root {
+    --bg: #f4f6f2; --panel: #ffffff; --text: #1c2321; --muted: #6b7671;
+    --accent: #3a7d44; --accent-soft: #e4f0e5; --user: #3a7d44; --user-text: #ffffff;
+    --border: #dde3dd; --pdf: #3a7d44; --web: #2d6cb5; --know: #8a6d3b;
+    --danger: #b34040;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14181a; --panel: #1e2427; --text: #e6ebe8; --muted: #93a09a;
+      --accent: #5aa564; --accent-soft: #23302a; --user: #3f6f46; --user-text: #f2f7f2;
+      --border: #313a3d; --pdf: #6fbf79; --web: #6ea8e8; --know: #d2b16a;
+      --danger: #e07a7a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    background: var(--bg); color: var(--text);
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 10px 16px; background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 17px; margin: 0; flex: 1 1 auto; }
+  header h1 small { color: var(--muted); font-weight: normal; font-size: 12px; }
+  .badge {
+    font-size: 12px; padding: 4px 10px; border-radius: 999px;
+    background: var(--accent-soft); color: var(--text);
+    border: 1px solid var(--border); cursor: pointer; white-space: nowrap;
+  }
+  .badge.off { background: #4a2a2a; color: var(--danger); }
+  main { flex: 1; display: flex; min-height: 0; }
+  #chat-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #messages { flex: 1; overflow-y: auto; padding: 18px 16px 8px; }
+  .msg { max-width: 860px; margin: 0 auto 14px; display: flex; flex-direction: column; }
+  .bubble {
+    padding: 10px 14px; border-radius: 12px; line-height: 1.55;
+    font-size: 15px; overflow-wrap: break-word;
+  }
+  .msg.user { align-items: flex-end; }
+  .msg.user .bubble { background: var(--user); color: var(--user-text); border-bottom-right-radius: 4px; white-space: pre-wrap; }
+  .msg.bot .bubble { background: var(--panel); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+  .bubble h1, .bubble h2, .bubble h3 { margin: .6em 0 .3em; font-size: 1.05em; }
+  .bubble p { margin: .4em 0; }
+  .bubble ul, .bubble ol { margin: .3em 0; padding-left: 1.4em; }
+  .bubble code { background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; font-size: .9em; }
+  .bubble a { color: var(--web); }
+  .meta { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  details.sources { margin-top: 8px; font-size: 13px; }
+  details.sources summary { cursor: pointer; color: var(--muted); user-select: none; }
+  details.sources ul { list-style: none; margin: 6px 0 0; padding: 0; }
+  details.sources li { margin: 3px 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .tag {
+    font-size: 11px; padding: 1px 8px; border-radius: 999px; white-space: nowrap;
+  }
+  .tag.pdf { background: color-mix(in srgb, var(--pdf) 16%, transparent); color: var(--pdf); border: 1px solid var(--pdf); }
+  .tag.web { background: color-mix(in srgb, var(--web) 16%, transparent); color: var(--web); border: 1px solid var(--web); }
+  .tag.know { background: color-mix(in srgb, var(--know) 16%, transparent); color: var(--know); border: 1px solid var(--know); }
+  .thinking { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
+  .spin {
+    width: 14px; height: 14px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: sp 1s linear infinite;
+  }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  #composer {
+    display: flex; gap: 8px; padding: 10px 16px 14px;
+    background: var(--bg); max-width: 900px; margin: 0 auto; width: 100%;
+  }
+  #input {
+    flex: 1; resize: none; min-height: 44px; max-height: 40vh; overflow-y: auto;
+    padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--panel); color: var(--text); font: inherit; font-size: 15px;
+  }
+  #input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button.btn {
+    padding: 0 16px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--accent); color: #fff; font: inherit; font-size: 14px;
+    cursor: pointer; white-space: nowrap;
+  }
+  button.btn:disabled { opacity: .45; cursor: not-allowed; }
+  button.btn.secondary { background: var(--panel); color: var(--text); }
+  button.btn.stop { background: var(--danger); display: none; }
+  /* documents drawer */
+  #docs {
+    position: fixed; top: 0; right: 0; bottom: 0; width: 340px; max-width: 92vw;
+    background: var(--panel); border-left: 1px solid var(--border);
+    transform: translateX(100%); transition: transform .22s ease;
+    display: flex; flex-direction: column; z-index: 20;
+  }
+  #docs.open { transform: none; }
+  #docs header { border-bottom: 1px solid var(--border); }
+  #docs .body { flex: 1; overflow-y: auto; padding: 12px 16px; }
+  #docs .doc { padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  #docs .doc b { display: block; overflow-wrap: anywhere; }
+  #docs .doc span { color: var(--muted); }
+  #drop {
+    margin: 12px 16px; padding: 14px; text-align: center; font-size: 13px;
+    color: var(--muted); border: 2px dashed var(--border); border-radius: 10px;
+    cursor: pointer;
+  }
+  #drop.hover { border-color: var(--accent); color: var(--accent); }
+  #docs-status { padding: 0 16px 12px; font-size: 12px; color: var(--muted); min-height: 18px; }
+  #scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none; z-index: 15; }
+  #scrim.open { display: block; }
+  @media (max-width: 640px) {
+    header h1 { font-size: 15px; } header h1 small { display: none; }
+    .bubble { font-size: 14px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>🌾 DUMY <small>– Heyvandarlıq köməkçisi</small></h1>
+  <span id="status" class="badge" title="Server statusu">yoxlanılır…</span>
+  <button class="btn secondary" id="docs-btn" style="height:32px">Sənədlər</button>
+</header>
+
+<main>
+  <div id="chat-pane">
+    <div id="messages"></div>
+    <div id="composer">
+      <textarea id="input" placeholder="Sualınızı yazın..." rows="2"></textarea>
+      <button class="btn" id="send">Göndər</button>
+      <button class="btn stop" id="stop">Dayandır</button>
+      <button class="btn secondary" id="new">Yeni söhbət</button>
+    </div>
+  </div>
+</main>
+
+<div id="scrim"></div>
+<aside id="docs">
+  <header>
+    <h1>Sənədlər (PDF-lər)</h1>
+    <button class="btn secondary" id="docs-close" style="height:30px">Bağla</button>
+  </header>
+  <div id="drop" title="PDF faylını buraya sürüşdürün">PDF yükləmək üçün faylı buraya sürüşdürün<br><small>(yalnız PDF, maksimum <span id="maxmb">200</span> MB)</small></div>
+  <input type="file" id="file" accept=".pdf,application/pdf" multiple hidden>
+  <div id="docs-status"></div>
+  <div class="body">
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <button class="btn secondary" id="refresh" style="flex:1;height:32px">Yenilə</button>
+      <button class="btn" id="rescan" style="flex:1;height:32px">Yenidən skan et</button>
+    </div>
+    <div id="doc-list">Yüklənir…</div>
+  </div>
+</aside>
+
+<script>
+"use strict";
+/* ---------------- state ---------------- */
+const $ = id => document.getElementById(id);
+const state = {
+  session: localStorage.getItem("dumy_session") || "",
+  abort: null,
+  running: false,
+  tick: null,
+};
+
+// Grows the message box with its content up to 40vh, then scrolls inside.
+// Runs on typing and on paste; height resets after sending.
+function autoGrow() {
+  const el = $("input");
+  el.style.height = "auto";
+  el.style.height = el.scrollHeight + "px";
+}
+
+function newSession() {
+  state.session = "";
+  localStorage.removeItem("dumy_session");
+  $("messages").innerHTML = "";
+  addBot("Salam! 🌾 Mən kənd təsərrüfatı və heyvanlar üzrə köməkçiyəm, amma gündəlik suallara da cavab verərəm. Nə barədə maraqlanırsınız?");
+}
+function sessionId() {
+  if (!state.session) {
+    state.session = (crypto.randomUUID ? crypto.randomUUID()
+                                      : "s" + Date.now() + "-" + Math.random().toString(36).slice(2));
+    localStorage.setItem("dumy_session", state.session);
+  }
+  return state.session;
+}
+
+/* ---------------- safe markdown ---------------- */
+function esc(s) {
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+          .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+function md(src) {
+  const lines = esc(src).split("\n");
+  let html = "", inUl = false, inOl = false;
+  const inline = t => t
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/(https?:\/\/[^\s<)\]]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+  const closeLists = () => {
+    if (inUl) { html += "</ul>"; inUl = false; }
+    if (inOl) { html += "</ol>"; inOl = false; }
+  };
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    let m;
+    if ((m = line.match(/^(#{1,3})\s+(.*)$/))) {
+      closeLists();
+      const lvl = m[1].length;
+      html += "<h" + lvl + ">" + inline(m[2]) + "</h" + lvl + ">";
+    } else if ((m = line.match(/^\s*[-*•]\s+(.*)$/))) {
+      if (inOl) { html += "</ol>"; inOl = false; }
+      if (!inUl) { html += "<ul>"; inUl = true; }
+      html += "<li>" + inline(m[1]) + "</li>";
+    } else if ((m = line.match(/^\s*(\d+)[.)]\s+(.*)$/))) {
+      if (inUl) { html += "</ul>"; inUl = false; }
+      if (!inOl) { html += "<ol>"; inOl = true; }
+      // Keep the number the model actually wrote. A blank line or prose
+      // between items splits the <ol>, and a fresh <ol> would restart every
+      // item at "1." - so each item carries its own value (question 1..N).
+      html += '<li value="' + m[1] + '">' + inline(m[2]) + "</li>";
+    } else if (line === "") {
+      closeLists(); html += "";
+    } else {
+      closeLists(); html += "<p>" + inline(line) + "</p>";
+    }
+  }
+  closeLists();
+  return html;
+}
+
+/* ---------------- chat rendering ---------------- */
+function scrollDown() { const m = $("messages"); m.scrollTop = m.scrollHeight; }
+
+function addUser(text) {
+  const d = document.createElement("div");
+  d.className = "msg user";
+  d.innerHTML = '<div class="bubble"></div>';
+  d.firstChild.textContent = text;
+  $("messages").appendChild(d);
+  scrollDown();
+}
+function addBot(html, meta) {
+  const d = document.createElement("div");
+  d.className = "msg bot";
+  d.innerHTML = '<div class="bubble"></div>';
+  d.firstChild.innerHTML = html;
+  if (meta) d.appendChild(meta);
+  $("messages").appendChild(d);
+  scrollDown();
+  return d;
+}
+function sourcesEl(sources, qtype) {
+  // No sources (small-talk fast path) -> no collapsible list at all.
+  if (!sources || !sources.length) return null;
+  const det = document.createElement("details");
+  det.className = "sources";
+  const n = sources ? sources.length : 0;
+  det.innerHTML = "<summary>Mənbələr</summary><ul></ul>";
+  const ul = det.querySelector("ul");
+  for (const s of (sources || [])) {
+    const li = document.createElement("li");
+    let tag, text;
+    if (s.type === "pdf") {
+      tag = '<span class="tag pdf">PDF</span>';
+      text = esc(s.source.split("/").pop()) + (s.page ? ", səh. " + s.page : "");
+    } else if (s.type === "web") {
+      tag = '<span class="tag web">İnternet</span>';
+      text = '<a href="' + esc(s.url) + '" target="_blank" rel="noopener noreferrer">' +
+             esc(s.url.length > 70 ? s.url.slice(0, 67) + "…" : s.url) + "</a>" +
+             (s.trusted ? ' <span class="tag web">etibarlı</span>'
+                        : ' <span class="tag know">təsdiqlənməyib</span>');
+    } else {
+      tag = '<span class="tag know">Ümumi bilik</span>';
+      text = "modelin öz bilikləri";
+    }
+    li.innerHTML = tag + " <span>" + text + "</span>";
+    ul.appendChild(li);
+  }
+  return det;
+}
+function thinkingEl() {
+  const d = document.createElement("div");
+  d.className = "msg bot";
+  d.innerHTML =
+    '<div class="bubble"><div class="thinking"><div class="spin"></div>' +
+    '<span>Düşünürəm... <b class="secs">0</b> san</span></div></div>';
+  return d;
+}
+
+/* ---------------- ask (SSE over fetch) ---------------- */
+async function ask() {
+  const text = $("input").value.trim();
+  if (!text || state.running) return;
+  $("input").value = "";
+  autoGrow();  // reset the textarea height after sending
+  addUser(text);
+  setRunning(true);
+
+  const holder = document.createElement("div");
+  holder.style.maxWidth = "860px"; holder.style.margin = "0 auto 14px";
+  holder.appendChild(thinkingEl());
+  $("messages").appendChild(holder);
+  scrollDown();
+  const secsEl = holder.querySelector(".secs");
+  const t0 = Date.now();
+  state.tick = setInterval(() => {
+    const s = Math.round((Date.now() - t0) / 1000);
+    secsEl.textContent = s;
+    const p = holder.querySelector(".psecs");
+    if (p) p.textContent = s;
+  }, 500);
+  // The internal verification / self-check pass runs on the server but is
+  // NEVER shown to the user: the generic "Düşünürəm..." spinner stays and
+  // status events are ignored (kept only in the server logs).
+
+  let streamed = "";
+  const bubble = () => holder.querySelector(".bubble");
+  try {
+    state.abort = new AbortController();
+    const resp = await fetch("/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId(), message: text }),
+      signal: state.abort.signal,
+    });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        if (!frame.startsWith("data:")) continue;
+        let ev;
+        try { ev = JSON.parse(frame.slice(5)); } catch (e) { continue; }
+        if (ev.type === "delta") {
+          streamed += ev.text;
+          bubble().innerHTML = md(streamed);
+          scrollDown();
+        } else if (ev.type === "status") {
+          // internal phase (e.g. selfcheck) - deliberately not displayed
+        } else if (ev.type === "error") {
+          throw new Error(ev.message);
+        } else if (ev.type === "done") {
+          clearInterval(state.tick);
+          holder.innerHTML = "";
+          const inner = document.createElement("div");
+          inner.className = "bubble";
+          inner.innerHTML = md(ev.answer || streamed);
+          holder.appendChild(inner);
+          const srcEl = sourcesEl(ev.sources, ev.qtype);
+          if (srcEl) holder.appendChild(srcEl);
+          if (ev.warning && ev.warning !== "web search disabled") {
+            const w = document.createElement("div");
+            w.className = "meta";
+            w.textContent = "⚠ " + ev.warning;
+            holder.appendChild(w);
+          }
+          scrollDown();
+        }
+      }
+    }
+    // stream ended without a done event (shouldn't happen): show what we have
+    if (holder.querySelector(".thinking")) {
+      clearInterval(state.tick);
+      const ph0 = holder.querySelector(".phase");
+      if (ph0) ph0.remove();
+      bubble().innerHTML = md(streamed || "(boş cavab)");
+    }
+  } catch (e) {
+    clearInterval(state.tick);
+    const ph = holder.querySelector(".phase");
+    if (ph) ph.remove();
+    const msg = (e && e.name === "AbortError")
+      ? "<i>Cavab dayandırıldı.</i>"
+      : "<b>Xəta:</b> " + esc(String(e.message || e));
+    const cur = holder.querySelector(".thinking") ? bubble() : holder.querySelector(".bubble");
+    if (cur) cur.innerHTML = msg;
+  } finally {
+    state.abort = null;
+    setRunning(false);
+    scrollDown();
+  }
+}
+
+function setRunning(on) {
+  state.running = on;
+  $("send").disabled = on;
+  $("stop").style.display = on ? "inline-block" : "none";
+}
+
+/* ---------------- health badge ---------------- */
+async function refreshHealth() {
+  const el = $("status");
+  try {
+    const r = await fetch("/health");
+    const h = await r.json();
+    const ok = h.ollama;
+    el.className = "badge" + (ok ? "" : " off");
+    el.textContent = (ok ? "● Ollama: işləyir" : "○ Ollama: bağlı") +
+      " · " + h.chat_model + " · " + (h.chunks || 0) + " chunk" +
+      " · internet: " + (h.web_search_enabled ? "açiq" : "bağlı");
+    el.title = "Embed: " + h.embedding_model + " | köməkçi: " + h.helper_model;
+  } catch (e) {
+    el.className = "badge off";
+    el.textContent = "○ Serverə qoşula bilmirəm";
+  }
+}
+
+/* ---------------- documents panel ---------------- */
+function docsOpen(on) {
+  $("docs").classList.toggle("open", on);
+  $("scrim").classList.toggle("open", on);
+  if (on) refreshDocs();
+}
+async function refreshDocs() {
+  const list = $("doc-list");
+  try {
+    const r = await fetch("/documents");
+    const j = await r.json();
+    const docs = j.documents || [];
+    if (!docs.length) { list.textContent = "Hələ heç bir PDF indeksləşməyib."; return; }
+    list.innerHTML = "";
+    let totalChunks = 0;
+    for (const d of docs) {
+      totalChunks += d.chunks || 0;
+      const div = document.createElement("div");
+      div.className = "doc";
+      const statusTag = d.status === "duplicate" ? ' <span class="tag know">təkrar</span>'
+                        : d.status === "failed" ? ' <span class="tag" style="color:var(--danger);border-color:var(--danger)">xəta</span>'
+                        : d.status === "mostly_scanned" ? ' <span class="tag know">skan</span>' : "";
+      div.innerHTML = "<b>" + esc(d.file) + statusTag + "</b><span>" +
+        (d.chunks || 0) + " chunk · " + (d.pages || "?") + " səhifə" +
+        (d.scanned_pages ? " · " + d.scanned_pages + " az mətnli" : "") +
+        (d.duplicate_of ? " · təkrar: " + esc(String(d.duplicate_of).split("/").pop()) : "") +
+        "</span>";
+      list.appendChild(div);
+    }
+    const tot = document.createElement("div");
+    tot.className = "doc";
+    tot.innerHTML = "<b>Cəmi: " + docs.length + " fayl · " + totalChunks + " chunk</b>";
+    list.prepend(tot);
+  } catch (e) {
+    list.textContent = "Siyahı yüklənmədi: " + e.message;
+  }
+}
+async function rescan() {
+  const st = $("docs-status");
+  $("rescan").disabled = true;
+  st.textContent = "Skan edilir… (bu bir neçə dəqiqə çəkə bilər)";
+  try {
+    const r = await fetch("/ingest", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const j = await r.json();
+    if (r.status === 409) {
+      st.textContent = j.error || "İndeks artıq skan edilir - gözləyin";
+      return;
+    }
+    st.textContent = "Nəticə: +" + (j.files_indexed || 0) + " fayl indeksləndi, " +
+      (j.files_skipped || 0) + " dəyişmədi, " + (j.files_duplicate || 0) + " təkrar, " +
+      (j.files_failed || 0) + " uğursuz, +" + (j.chunks_added || 0) + " chunk" +
+      (j.message ? " — " + j.message : "");
+    refreshDocs(); refreshHealth();
+  } catch (e) {
+    st.textContent = "Xəta: " + e.message;
+  } finally {
+    $("rescan").disabled = false;
+  }
+}
+async function uploadFiles(files) {
+  const st = $("docs-status");
+  for (const f of files) {
+    if (!/\.pdf$/i.test(f.name)) { st.textContent = "Yalnız PDF qəbul olunur: " + f.name; continue; }
+    st.textContent = "Sənəd yüklə: " + f.name + " …";
+    const fd = new FormData();
+    fd.append("file", f, f.name);
+    try {
+      const r = await fetch("/upload", { method: "POST", body: fd });
+      const j = await r.json();
+      if (!r.ok) { st.textContent = "Xəta: " + (j.error || r.status); continue; }
+      st.textContent = "Yükləndi: " + j.file + " — indeksləşdirilir…";
+      const r2 = await fetch("/ingest", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const j2 = await r2.json();
+      if (r2.status === 409) {
+        st.textContent = j.file + " yükləndi; indeks artıq işləyir - sonra " +
+          "\"Yenidən skan et\" ilə yoxlayın";
+        continue;
+      }
+      st.textContent = j.file + " indeksləndi (+" + (j2.chunks_added || 0) + " chunk)";
+      refreshDocs(); refreshHealth();
+    } catch (e) {
+      st.textContent = "Xəta: " + e.message;
+    }
+  }
+}
+
+/* ---------------- wiring ---------------- */
+$("send").addEventListener("click", ask);
+$("stop").addEventListener("click", () => { if (state.abort) state.abort.abort(); });
+$("new").addEventListener("click", newSession);
+$("input").addEventListener("input", autoGrow);
+$("input").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); }
+});
+$("status").addEventListener("click", refreshHealth);
+$("docs-btn").addEventListener("click", () => docsOpen(true));
+$("docs-close").addEventListener("click", () => docsOpen(false));
+$("scrim").addEventListener("click", () => docsOpen(false));
+$("refresh").addEventListener("click", refreshDocs);
+$("rescan").addEventListener("click", rescan);
+$("drop").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", e => uploadFiles(e.target.files));
+["dragover","dragenter"].forEach(ev =>
+  $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").classList.add("hover"); }));
+["dragleave","drop"].forEach(ev =>
+  $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").classList.remove("hover"); }));
+$("drop").addEventListener("drop", e => uploadFiles(e.dataTransfer.files));
+document.addEventListener("dragover", e => e.preventDefault());
+document.addEventListener("drop", e => e.preventDefault());
+
+if (!state.session) newSession();
+else addBot("Salam! 🌾 Yenidən xoş gördük. Nə barədə maraqlanırsınız?");
+setInterval(refreshHealth, 30000);
+refreshHealth();
+autoGrow();
+$("input").focus();
+</script>
+</body>
+</html>

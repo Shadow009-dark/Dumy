@@ -1,0 +1,14 @@
+﻿build/
+*.log
+*.tmp
+*.bak
+.cloud-attachments/
+.freebuff/
+pdfs/
+metnler/
+db/
+data/
+data_backup_*/
+test_results/
+benchmark/
+vcpkg_installed/
