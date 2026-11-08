@@ -93,6 +93,7 @@ private:
     std::vector<Chunk> rerank_or_trim(const std::string& question,
                                       std::vector<Chunk> candidates,
                                       QuestionType qtype,
+                                      float score_margin,
                                       std::string* err) const;
 
     std::vector<Chunk> map_reduce_summarize(const std::string& question,

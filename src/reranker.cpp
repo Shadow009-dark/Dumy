@@ -59,8 +59,11 @@ std::vector<Chunk> Reranker::rerank(const std::string& query,
     // Bound the scoring cost: only the retrieval-order head is ever worth
     // scoring (the tail does not survive reranking anyway). This keeps the
     // draft-model rerank call fast on a 6 GB GPU.
-    constexpr size_t MAX_TO_SCORE = 16;
-    if (uniq.size() > MAX_TO_SCORE) uniq.resize(MAX_TO_SCORE);
+    // Step 4: cap the LLM input (default 6 chunks). A 7B model scoring 16
+    // snippets is a 10-20 s call; the tail never survives anyway.
+    const size_t max_to_score =
+        static_cast<size_t>(std::max(1, cfg_.rerank_max_candidates));
+    if (uniq.size() > max_to_score) uniq.resize(max_to_score);
     log_info("rerank: " + std::to_string(candidates.size()) + " candidates, " +
              std::to_string(uniq.size()) + " unique");
 

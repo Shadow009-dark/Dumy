@@ -32,6 +32,8 @@ struct RetrievalOutcome {
     std::vector<Chunk> web_chunks;         // web hits (already ranked)
     std::string web_warning;               // why web failed ("" = fine)
     bool expansion_ok = false;
+    float max_score = 0.0f;                // top-1 raw vector cosine (before rerank)
+    float score_margin = 0.0f;             // top-1 minus k-th cosine (rerank skip signal)
 };
 
 class Retriever {
@@ -52,8 +54,17 @@ public:
                                           QuestionType t) const;
 
     // Vector + BM25 + RRF over the PDF/web store. Returns up to k chunks.
-    std::vector<Chunk> retrieve_store(const std::vector<std::string>& queries,
-                                      size_t k) const;
+// Also computes max raw vector cosine (top-1) for the retrieval guard.
+    struct StoreResult {
+        std::vector<Chunk> chunks;
+        float max_score = 0.0f;   // top-1 raw vector cosine before rerank
+        // Step 4: top-1 minus the k-th cosine. A large gap means the vector
+        // ranking already separates the relevant head from the tail, so the
+        // LLM rerank call can be skipped.
+        float score_margin = 0.0f;
+    };
+    StoreResult retrieve_store(const std::vector<std::string>& queries,
+                               size_t k) const;
 
     // Web search in parallel with PDF retrieval: search -> download ->
     // clean -> chunk -> embed -> hybrid rank. Never throws; failures are

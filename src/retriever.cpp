@@ -281,18 +281,25 @@ Retriever::StoreResult Retriever::retrieve_store(const std::vector<std::string>&
     if (fused.empty()) return result;
     result.chunks = store_->get(fused);
 
-    // --- Compute max raw vector cosine (top-1) for retrieval guard ---
+    // --- Compute max raw vector cosine (top-1) for the retrieval guard and
+    // the top-1/top-k margin used to decide whether LLM reranking is needed.
     if (!first_qv.empty() && !result.chunks.empty()) {
         InMemoryVectorStore::normalize(first_qv);
-        float best = 0.0f;
+        std::vector<float> sims;
+        sims.reserve(result.chunks.size());
         for (const auto& c : result.chunks) {
             if (c.embedding.empty()) continue;
             double dot = 0;
             size_t n = std::min(first_qv.size(), c.embedding.size());
             for (size_t i = 0; i < n; ++i) dot += double(first_qv[i]) * c.embedding[i];
-            if (dot > best) best = float(dot);
+            sims.push_back(static_cast<float>(dot));
         }
-        result.max_score = best;
+        if (!sims.empty()) {
+            std::sort(sims.begin(), sims.end(), std::greater<float>());
+            result.max_score = sims.front();
+            const size_t cut = std::min<size_t>(k > 0 ? k : 1, sims.size()) - 1;
+            result.score_margin = sims.front() - sims[cut];
+        }
     }
 
     return result;
@@ -430,6 +437,7 @@ RetrievalOutcome Retriever::retrieve(const std::string& question) const {
     StoreResult store_result = retrieve_store(out.queries, static_cast<size_t>(out.top_k));
     out.pdf_chunks = std::move(store_result.chunks);
     out.max_score = store_result.max_score;
+    out.score_margin = store_result.score_margin;
     out.web_chunks = retrieve_web(question, out.queries,
                                   static_cast<size_t>(out.top_k),
                                   &out.web_warning);

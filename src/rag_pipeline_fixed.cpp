@@ -474,12 +474,26 @@ bool RagPipeline::warmup(std::string* err) {
 std::vector<Chunk> RagPipeline::rerank_or_trim(const std::string& question,
                                                std::vector<Chunk> candidates,
                                                QuestionType qtype,
+                                               float score_margin,
                                                std::string* err) const {
+    const size_t keep = static_cast<size_t>(std::max(1, cfg_.rerank_top_n));
+
+    // Step 4: when the vector ranking already separates the head clearly
+    // (top-1 cosine is far ahead of the top-k tail), the LLM rerank call adds
+    // 10-20 s and changes nothing - skip it and keep retrieval order.
+    if (cfg_.rerank_skip_margin > 0.0f && score_margin >= cfg_.rerank_skip_margin) {
+        log_info("rerank skipped: cosine margin " + std::to_string(score_margin) +
+                 " >= " + std::to_string(cfg_.rerank_skip_margin));
+        if (candidates.size() > keep) candidates.resize(keep);
+        if (err) err->clear();
+        return candidates;
+    }
+
     const bool fast_simple = cfg_.fast_mode &&
                              (qtype == QuestionType::SimpleFact ||
                               qtype == QuestionType::General);
     if (fast_simple) {
-        // fast mode: skip step 4 (rerank) - RRF order is already good.
+        // fast mode: skip reranking - RRF order is already good.
         if (candidates.size() > static_cast<size_t>(cfg_.top_k_simple)) {
             candidates.resize(static_cast<size_t>(
                 std::max(cfg_.top_k_simple, cfg_.rerank_top_n / 2)));
@@ -487,8 +501,7 @@ std::vector<Chunk> RagPipeline::rerank_or_trim(const std::string& question,
         if (err) err->clear();
         return candidates;
     }
-    return reranker_.rerank(question, candidates,
-                            static_cast<size_t>(cfg_.rerank_top_n), err);
+    return reranker_.rerank(question, candidates, keep, err);
 }
 
 std::vector<Chunk> RagPipeline::map_reduce_summarize(
@@ -678,7 +691,9 @@ AnswerResult RagPipeline::answer(const std::string& question,
         });
     }
 
-    std::vector<Chunk> pdf_chunks = pdf_fut.get().chunks;
+    Retriever::StoreResult pdf_result = pdf_fut.get();
+    std::vector<Chunk> pdf_chunks = std::move(pdf_result.chunks);
+    const float pdf_score_margin = pdf_result.score_margin;  // Step 4 signal
     const double ms_pdf = t_parallel.ms();
     WebOut web_out;
     if (web_enabled) web_out = web_fut.get();
@@ -707,7 +722,8 @@ AnswerResult RagPipeline::answer(const std::string& question,
     std::string rk_err;
     std::vector<Chunk> selected;
     if (!candidates.empty()) {
-        selected = rerank_or_trim(q, std::move(candidates), qtype, &rk_err);
+        selected = rerank_or_trim(q, std::move(candidates), qtype,
+                                  pdf_score_margin, &rk_err);
         // Source diversity + near-duplicate removal for the final context.
         selected = diversify(std::move(selected));
     }
