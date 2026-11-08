@@ -258,7 +258,9 @@ inline void log_model_call(const char* stage, const std::string& model,
              " gen=" + std::to_string(gen_ms) + "ms" +
              " tok=" + std::to_string(prompt_tokens) + "+" +
              std::to_string(eval_tokens) +
-             (load_ms > 0 ? " [MODEL LOADED/SWAPPED]" : " [model resident]"));
+             // Step 2: only a real load/swap (>500 ms) deserves the marker;
+             // normal calls must stay quiet.
+             (load_ms > 500 ? " [MODEL LOADED/SWAPPED]" : ""));
 }
 
 }  // namespace dumy
