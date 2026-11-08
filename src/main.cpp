@@ -79,6 +79,8 @@ struct CliArgs {
     bool no_browser = false;
     std::string config_path;
     std::string chat_model;
+    std::string helper_model;
+    std::string selfcheck_model;
     int port = -1;
 };
 
@@ -96,6 +98,8 @@ void print_usage() {
         "  --config <path>          config.json faylının yolu\n"
         "  --port <n>               server portu (config-dan üstündür)\n"
         "  --chat-model <ad>        çat modeli (məs. qwen3:8b, llama3.1:8b)\n"
+        "  --helper-model <ad>      expansion/rerank modeli (default: config)\n"
+        "  --selfcheck-model <ad>   fact-check modeli (default: config)\n"
         "  --no-web                 internet axtarışını söndürür\n"
         "  --no-browser              brauzeri avtomatik açmır (testlər üçün)\n"
         "  --help                   bu köməkçi mətni\n";
@@ -232,6 +236,8 @@ int main(int argc, char** argv) {
         else if (a == "--config" && i + 1 < argc) args.config_path = argv[++i];
         else if (a == "--port" && i + 1 < argc) args.port = std::atoi(argv[++i]);
         else if (a == "--chat-model" && i + 1 < argc) args.chat_model = argv[++i];
+        else if (a == "--helper-model" && i + 1 < argc) args.helper_model = argv[++i];
+        else if (a == "--selfcheck-model" && i + 1 < argc) args.selfcheck_model = argv[++i];
         else {
             std::cerr << "Naməlum seçim: " << a << " (--help ilə kömək)\n";
             return 2;
@@ -251,6 +257,10 @@ int main(int argc, char** argv) {
     if (args.no_browser) cfg.open_browser = false;
     if (args.port > 0) cfg.port = args.port;
     if (!args.chat_model.empty()) cfg.chat_model = args.chat_model;
+    // Benchmarking a single main model: keep expansion/rerank/self-check on
+    // the SAME model, otherwise Ollama swaps a second model in on every call.
+    if (!args.helper_model.empty()) cfg.helper_model = args.helper_model;
+    if (!args.selfcheck_model.empty()) cfg.selfcheck_model = args.selfcheck_model;
 
     std::error_code ec;
     fs::create_directories(cfg.data_dir(), ec);

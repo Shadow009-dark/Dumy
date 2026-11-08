@@ -128,7 +128,10 @@ def start_server(model: str, port: int, log_path: Path) -> subprocess.Popen:
     env["PYTHONIOENCODING"] = "utf-8"
     proc = subprocess.Popen(
         [str(EXE), "--port", str(port), "--no-browser", "--no-web",
-         "--chat-model", model],
+         "--chat-model", model,
+         # One main model for every role: otherwise expansion/rerank/self-check
+         # pull qwen2.5:7b from config and Ollama swaps models every call.
+         "--helper-model", model, "--selfcheck-model", model],
         cwd=str(ROOT),
         stdout=log,
         stderr=subprocess.STDOUT,
@@ -173,6 +176,7 @@ def run_model(model: str, port: int, limit: int, pull: bool) -> list[dict]:
         print(f"  warm-up: draft_ready={warm.get('main_ready')} "
               f"resident={warm.get('main_resident')} embed_cpu={warm.get('embed_on_cpu')} "
               f"load_ms={warm.get('main_load_ms')}", flush=True)
+        print(f"  single main model: chat=helper=selfcheck={model}", flush=True)
         print(f"  loaded models: {', '.join(loaded) or '-'}", flush=True)
 
         for i, (question, keywords) in enumerate(QUESTIONS[:limit], 1):
