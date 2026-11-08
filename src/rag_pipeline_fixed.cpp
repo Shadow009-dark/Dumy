@@ -489,9 +489,15 @@ std::vector<Chunk> RagPipeline::rerank_or_trim(const std::string& question,
     // (top-1 cosine is far ahead of the top-k tail), the LLM rerank call adds
     // 10-20 s and changes nothing - skip it and keep retrieval order.
     if (cfg_.rerank_skip_margin > 0.0f && score_margin >= cfg_.rerank_skip_margin) {
+        // Keep the same cap the LLM reranker would have used (default 6): the
+        // skipped call must not leave a larger context than the scored path,
+        // otherwise prompt + num_predict can exceed num_ctx.
+        const size_t skip_keep =
+            std::min(keep, static_cast<size_t>(std::max(1, cfg_.rerank_max_candidates)));
         log_info("rerank skipped: cosine margin " + std::to_string(score_margin) +
-                 " >= " + std::to_string(cfg_.rerank_skip_margin));
-        if (candidates.size() > keep) candidates.resize(keep);
+                 " >= " + std::to_string(cfg_.rerank_skip_margin) + " (keep=" +
+                 std::to_string(skip_keep) + ")");
+        if (candidates.size() > skip_keep) candidates.resize(skip_keep);
         if (err) err->clear();
         return candidates;
     }
@@ -852,6 +858,27 @@ AnswerResult RagPipeline::answer(const std::string& question,
                  ") - map-reduce xülasələri işə salınır");
         context_chunks = map_reduce_summarize(q, selected);
         res.used_map_reduce = true;
+    }
+
+    // Hard fit guard: Ollama rejects a prompt that exceeds num_ctx (qwen3:4b
+    // answered HTTP 400 at 8216 tokens with num_ctx 8192). estimate_tokens is
+    // optimistic for Azerbaijani, so reserve system prompt + answer + margin
+    // and drop tail chunks until the estimate fits.
+    {
+        const size_t reserve = 900 + static_cast<size_t>(cfg_.num_predict_draft) + 1500;
+        const size_t limit = cfg_.num_ctx > static_cast<int>(reserve) + 512
+                                 ? static_cast<size_t>(cfg_.num_ctx) - reserve
+                                 : size_t(1024);
+        const size_t before_trim = context_chunks.size();
+        while (context_chunks.size() > 1 && total_tokens(context_chunks) > limit) {
+            context_chunks.pop_back();
+        }
+        if (context_chunks.size() != before_trim) {
+            log_info("context trimmed to fit num_ctx: " +
+                     std::to_string(before_trim) + " -> " +
+                     std::to_string(context_chunks.size()) + " chunks (limit=" +
+                     std::to_string(limit) + " est. tokens)");
+        }
     }
 
     // --- 6. draft answer (streamed) ----------------------------------------
