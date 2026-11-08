@@ -236,4 +236,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # Windows consoles default to a local codepage (cp1254 here) that cannot
+    # encode Azerbaijani letters; force UTF-8 so printing never aborts a run.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())
