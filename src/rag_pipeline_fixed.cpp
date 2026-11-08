@@ -624,6 +624,49 @@ AnswerResult RagPipeline::answer(const std::string& question,
         return res;
     }
 
+    // --- 0a. Identity question about the bot: direct answer, no retrieval ---
+    if (is_identity_question(q)) {
+        log_info("fastpath: identity question");
+        res.smalltalk = true;
+        res.qtype = "identity";
+        res.no_sources = true;
+        const std::string creator = cfg_.creator.empty() ? "DUMY Team" : cfg_.creator;
+        res.answer = "Mən DUMY-yəm, aqronomluq və maldarlıq üzrə köməkçiyəm. "
+                     "Məni " + creator + " hazırlayıb.";
+        if (on_delta) on_delta(res.answer);
+        return res;
+    }
+
+    // --- 0b. Date / weekday question: answer from the system clock ----------
+    if (is_datetime_question(q)) {
+        log_info("fastpath: datetime question");
+        res.smalltalk = true;
+        res.qtype = "datetime";
+        res.no_sources = true;
+        res.answer = "Bu gün " + get_current_datetime_az() + ".";
+        if (on_delta) on_delta(res.answer);
+        return res;
+    }
+
+    // --- 0c. Arithmetic: computed here, never from PDF context --------------
+    const bool arithmetic_q = is_arithmetic_question(q);
+    if (arithmetic_q) {
+        double value = 0.0;
+        if (eval_simple_arithmetic(extract_arithmetic_expression(q), value)) {
+            log_info("fastpath: arithmetic question");
+            res.qtype = "arithmetic";
+            res.smalltalk = true;
+            res.no_sources = true;
+            res.answer = "Nəticə: " + format_arithmetic_result(value) + ".";
+            if (on_delta) on_delta(res.answer);
+            return res;
+        }
+        // A word problem we cannot evaluate: still answer with general
+        // knowledge, never with unrelated PDF citations (context dropped
+        // after retrieval below).
+        log_info("arithmetic-like question could not be parsed - answering without PDF context");
+    }
+
     // --- 0. Small-talk fast path: greetings/thanks/bye, NO LLM call -------
     if (is_smalltalk(q)) {
         log_info("fastpath: smalltalk");
@@ -713,6 +756,16 @@ AnswerResult RagPipeline::answer(const std::string& question,
     std::vector<Chunk> pdf_chunks = std::move(pdf_result.chunks);
     const float pdf_score_margin = pdf_result.score_margin;  // Step 4 signal
     const double ms_pdf = t_parallel.ms();
+
+    // Step 7: never attach unrelated PDF citations. When the best vector hit
+    // is below min_score the matched chunks are noise (e.g. "Telefon nədir?"),
+    // so the answer comes from general knowledge instead.
+    if (pdf_result.max_score > 0.0f && pdf_result.max_score < cfg_.min_score) {
+        log_info("retrieval guard: top cosine " + std::to_string(pdf_result.max_score) +
+                 " < min_score " + std::to_string(cfg_.min_score) +
+                 " - PDF context dropped");
+        pdf_chunks.clear();
+    }
     WebOut web_out;
     if (web_enabled) web_out = web_fut.get();
     const double ms_web = web_enabled ? t_parallel.ms() : 0.0;
@@ -727,6 +780,12 @@ AnswerResult RagPipeline::answer(const std::string& question,
              " | PDF: " + std::to_string(candidates.size() - web_out.chunks.size()) +
              " | web: " + std::to_string(web_out.chunks.size()) +
              " | expansion: " + std::to_string(queries.size() - 1) + " alt-sual");
+    if (arithmetic_q) {
+        candidates.clear();       // word-problem fallback: no PDF context
+        res.used_web = false;
+        web_out.chunks.clear();
+        log_info("arithmetic: retrieval context dropped");
+    }
 
     // --- 4. rerank (skipped by fast mode for simple questions) -------------
     // Relevance gate: a short non-topic message must not get PDF/web chunks
@@ -798,7 +857,8 @@ AnswerResult RagPipeline::answer(const std::string& question,
         user_msg =
             "KONTEKST: Bu sual üzrə PDF və ya internet məlumatı tapılmadı.\n"
             "Cavabı öz biliklərinlə ver və mütləq [Ümumi bilik] etiketini qeyd et, "
-            "mənbəsiz faktları mənbəli kimi təqdim etmə.\n\nSUAL: " + q;
+            "mənbəsiz faktları mənbəli kimi təqdim etmə. Suala birbaşa cavab ver - "
+            "\"Məlumat vermək istəyirsiniz?\" və ya oxşar əlavə sual YAZMA.\n\nSUAL: " + q;
     } else {
         user_msg = build_context_block(context_chunks) + "\n\n" +
                    build_draft_user_message(q);
@@ -947,7 +1007,8 @@ AnswerResult RagPipeline::answer(const std::string& question,
     const double ms_check = t_check.ms();
     StageTimer t_post;
     final_answer = validate_source_labels(
-        fix_url_labels(strip_summary_labels(OllamaClient::strip_thinking(final_answer))),
+        strip_clarification_offer(fix_url_labels(
+            strip_summary_labels(OllamaClient::strip_thinking(final_answer)))),
         selected);
 
     // --- 8. strip model-written source list, add notes + safety warning ----
