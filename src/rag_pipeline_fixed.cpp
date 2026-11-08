@@ -660,6 +660,12 @@ AnswerResult RagPipeline::answer(const std::string& question,
     // search - greetings are already handled by the fast path above.
     const bool short_non_topic =
         meaningful_word_count(q) < 3 && qtype == QuestionType::General;
+    // Step 5: short factual question -> expansion -> retrieval -> draft only.
+    // Rerank, map-reduce and self-check are reserved for long / multi-document
+    // questions where they actually change the answer.
+    const bool fast_path =
+        cfg_.fast_path_enabled && qtype == QuestionType::SimpleFact &&
+        meaningful_word_count(q) <= static_cast<size_t>(std::max(1, cfg_.fast_path_max_words));
     const int top_k = retriever_.top_k_for(qtype);
     const double ms_route = t_route.ms();
 
@@ -722,10 +728,22 @@ AnswerResult RagPipeline::answer(const std::string& question,
     std::string rk_err;
     std::vector<Chunk> selected;
     if (!candidates.empty()) {
-        selected = rerank_or_trim(q, std::move(candidates), qtype,
-                                  pdf_score_margin, &rk_err);
-        // Source diversity + near-duplicate removal for the final context.
-        selected = diversify(std::move(selected));
+        if (fast_path) {
+            // Step 5: no LLM rerank on the fast path - keep retrieval order,
+            // cap to top_k_simple and only remove duplicates / cap per source.
+            log_info("pipeline: FAST PATH (simple fact, " +
+                     std::to_string(meaningful_word_count(q)) +
+                     " words) - rerank skipped");
+            selected = diversify(std::move(candidates));
+            const size_t cap = static_cast<size_t>(std::max(1, cfg_.top_k_simple));
+            if (selected.size() > cap) selected.resize(cap);
+        } else {
+            log_info("pipeline: full path (" + res.qtype + ")");
+            selected = rerank_or_trim(q, std::move(candidates), qtype,
+                                      pdf_score_margin, &rk_err);
+            // Source diversity + near-duplicate removal for the final context.
+            selected = diversify(std::move(selected));
+        }
     }
     const double ms_rerank = t_rerank.ms();
     if (!rk_err.empty()) log_warn("rerank: " + rk_err);
@@ -747,7 +765,7 @@ AnswerResult RagPipeline::answer(const std::string& question,
     // fired on ordinary questions and paid 2-5 extra LLM calls for nothing.
     const size_t mapred_limit =
         static_cast<size_t>(std::max(1000, cfg_.map_reduce_threshold_tokens));
-    const bool do_map_reduce = total_tokens(selected) > mapred_limit &&
+    const bool do_map_reduce = !fast_path && total_tokens(selected) > mapred_limit &&
                                selected.size() > 6;
     std::vector<Chunk> context_chunks = selected;
     if (do_map_reduce) {
@@ -959,6 +977,7 @@ AnswerResult RagPipeline::answer(const std::string& question,
              ", draft=" + std::to_string((int)ms_draft) +
              ", self_check=" + std::to_string((int)ms_check) +
              ", post=" + std::to_string((int)ms_post) +
+             ", path=" + (fast_path ? "fast" : "full") +
              ", TOTAL=" + std::to_string((int)ms_total));
 
     // --- 9. remember the turn for follow-up questions ----------------------
