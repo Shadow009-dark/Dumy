@@ -185,25 +185,24 @@ std::vector<Chunk> Reranker::rerank(const std::string& query,
         log_info("rerank scores (best first): " + dbg);
     }
 
-    // Spec behaviour: keep the BEST chunks by score (rerank_top_n), filling
-    // with retrieval order for anything the model did not score. No absolute
-    // relevance cutoff - small models score unreliably, and weak context is
-    // already handled by the pipeline's own-knowledge path.
+    // Step 3: keep ONLY chunks the model scored >= rerank_min_score (default
+    // 8/10). Weak chunks are worse than no context: they produce unrelated
+    // citations and trigger map-reduce, so they are dropped here and the
+    // pipeline falls back to general knowledge when nothing survives.
+    const double min_score = static_cast<double>(cfg_.rerank_min_score);
     std::vector<Chunk> out;
-    std::unordered_set<int> scored_ids;
     for (const auto& s : scores) {
+        if (s.second < min_score) break;  // scores are sorted best-first
         out.push_back(uniq[s.first]);
-        scored_ids.insert(s.first);
         if (out.size() >= keep) break;
-    }
-    if (out.size() < keep) {
-        for (size_t i = 0; i < uniq.size() && out.size() < keep; ++i) {
-            if (!scored_ids.count(static_cast<int>(i))) out.push_back(uniq[i]);
-        }
     }
     log_info("rerank: kept " + std::to_string(out.size()) + "/" +
              std::to_string(uniq.size()) + " chunks (" +
-             std::to_string(scores.size()) + " scored)");
+             std::to_string(scores.size()) + " scored, min_score=" +
+             std::to_string(min_score) + ")");
+    if (out.empty()) {
+        log_info("rerank: heç bir chunk min_score-a çatmadı - ümumi bilik yolu");
+    }
     if (err) err->clear();
     return out;
 }

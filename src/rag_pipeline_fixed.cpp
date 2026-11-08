@@ -504,7 +504,7 @@ std::vector<Chunk> RagPipeline::map_reduce_summarize(
     std::vector<Chunk> summaries;
     // Centralized options: same num_ctx/keep_alive as the draft call, so the
     // summary pass never triggers a model reload.
-    ChatOptions opts = cfg_.chat_options(400, 0.1);
+    ChatOptions opts = cfg_.chat_options(150, 0.1);
 
     for (size_t g = 0; g < group_count; ++g) {
         size_t begin = g * per_group;
@@ -727,13 +727,17 @@ AnswerResult RagPipeline::answer(const std::string& question,
     }
 
     // --- 5. map-reduce when the context is too large -----------------------
-    const bool do_map_reduce =
-        total_tokens(selected) > static_cast<size_t>(cfg_.context_budget_tokens) &&
-        selected.size() > 6;
+    // Step 3: the trigger is its own (much higher) threshold - ~3900 tokens
+    // fired on ordinary questions and paid 2-5 extra LLM calls for nothing.
+    const size_t mapred_limit =
+        static_cast<size_t>(std::max(1000, cfg_.map_reduce_threshold_tokens));
+    const bool do_map_reduce = total_tokens(selected) > mapred_limit &&
+                               selected.size() > 6;
     std::vector<Chunk> context_chunks = selected;
     if (do_map_reduce) {
         log_info("Kontekst çox böyükdür (" + std::to_string(total_tokens(selected)) +
-                 " token) - map-reduce xülasələri işə salınır");
+                 " token > " + std::to_string(mapred_limit) +
+                 ") - map-reduce xülasələri işə salınır");
         context_chunks = map_reduce_summarize(q, selected);
         res.used_map_reduce = true;
     }
