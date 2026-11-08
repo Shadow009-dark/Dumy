@@ -661,6 +661,20 @@ AnswerResult RagPipeline::answer(const std::string& question,
         return res;
     }
 
+    // --- 0b2. Feed calculation with missing inputs: explicit assumptions ----
+    // "120 baş mal-qaranın 30 günlük yemi nə qədərdir?" needs live weight and a
+    // ration rate that are not in the question; answer deterministically with
+    // the formula, labelled assumptions and no [Mənbə: ...] labels.
+    if (is_feed_calculation_question(q)) {
+        log_info("fastpath: feed calculation - explicit assumptions, no PDF citations");
+        res.qtype = "calculation";
+        res.from_own_knowledge = true;
+        res.no_sources = true;
+        res.answer = build_feed_calculation_answer(q);
+        if (on_delta) on_delta(res.answer);
+        return res;
+    }
+
     // --- 0c. Arithmetic: computed here, never from PDF context --------------
     const bool arithmetic_q = is_arithmetic_question(q);
     if (arithmetic_q) {
