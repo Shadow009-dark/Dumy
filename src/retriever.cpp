@@ -75,14 +75,26 @@ QuestionType Retriever::analyze(const std::string& question) const {
                          " generall", "wide range"}))
         return QuestionType::BroadTopic;
 
-    // Diagnosis / treatment (safety warnings apply).
-    if (contains_any(q, {"xəstəlik", "xestelik", "xəstə", "xeste", "simptom", "əlamət",
-                         "elamet", "diaqnoz", "müalicə", "mualice", "niyə öl", "niye ol",
-                         "nə üçün", "ne ucun", "ağrır", "agrir", "qızdır", "qizdir",
-                         "antibiot", "peyvənd", "peyvend", "vaksin", "dərman", "derman",
-                         "doza", "dose", "səbəb", "sebeb", "symptom", "disease",
-                         "treatment", "sick", "mortality", "diagnos"}))
-        return QuestionType::Diagnosis;
+    // Diagnosis / treatment (safety warnings apply) - use config keywords.
+    if (cfg_.diagnosis_keywords.empty()) {
+        // Fallback to hardcoded list if config is empty
+        if (contains_any(q, {"xəstəlik", "xestelik", "xəstə", "xeste", "simptom", "əlamət",
+                             "elamet", "diaqnoz", "müalicə", "mualice", "niyə öl", "niye ol",
+                             "nə üçün", "ne ucun", "ağrır", "agrir", "qızdır", "qizdir",
+                             "antibiot", "peyvənd", "peyvend", "vaksin", "dərman", "derman",
+                             "doza", "dose", "səbəb", "sebeb", "symptom", "disease",
+                             "treatment", "sick", "mortality", "diagnos"}))
+            return QuestionType::Diagnosis;
+    } else {
+        // Convert config keywords to vector<const char*> for contains_any
+        std::vector<const char*> diag_keywords;
+        diag_keywords.reserve(cfg_.diagnosis_keywords.size());
+        for (const auto& kw : cfg_.diagnosis_keywords) {
+            diag_keywords.push_back(kw.c_str());
+        }
+        if (contains_any(q, diag_keywords))
+            return QuestionType::Diagnosis;
+    }
 
     // Everyday/general questions are usually short and not agriculture-related.
     static const std::vector<const char*> agri = {
@@ -153,13 +165,9 @@ std::vector<std::string> Retriever::expand_query(const std::string& question,
                        "\"infectious livestock diseases\"]\n"
                        "Reply with ONLY the JSON array.";
 
-    ChatOptions opts;
-    opts.temperature = 0.2;
-    opts.num_predict = 320;
-    // Match the draft ctx: with helper == draft model, a different num_ctx
+    // Centralized options: with helper == draft model a different num_ctx
     // would make Ollama reload the 7B before the draft.
-    opts.num_ctx = cfg_.num_ctx;
-    opts.keep_alive = cfg_.keep_alive;
+    ChatOptions opts = cfg_.chat_options(320, 0.2);
 
     std::string err;
     // Tolerant JSON array extraction: first '[' ... last ']'.
@@ -240,15 +248,21 @@ std::vector<std::string> Retriever::expand_query(const std::string& question,
     return out;
 }
 
-std::vector<Chunk> Retriever::retrieve_store(const std::vector<std::string>& queries,
-                                             size_t k) const {
+Retriever::StoreResult Retriever::retrieve_store(const std::vector<std::string>& queries,
+                                                  size_t k) const {
+    StoreResult result;
     const size_t per_query = std::max<size_t>(k * 2, 20);
     std::vector<std::vector<int>> lists;
 
-    for (const auto& q : queries) {
+    // Track query embeddings for max_score computation
+    std::vector<float> first_qv;
+
+    for (size_t qi = 0; qi < queries.size(); ++qi) {
+        const auto& q = queries[qi];
         // (a) vector side
         std::vector<float> qv = embed_query(q);
         if (!qv.empty()) {
+            if (first_qv.empty()) first_qv = qv;  // keep first query embedding for scoring
             auto hits = store_->search(qv, per_query);
             std::vector<int> ids;
             ids.reserve(hits.size());
@@ -262,10 +276,26 @@ std::vector<Chunk> Retriever::retrieve_store(const std::vector<std::string>& que
         }
     }
 
-    if (lists.empty()) return {};
+    if (lists.empty()) return result;
     std::vector<int> fused = rrf_fuse(lists, k);
-    if (fused.empty()) return {};
-    return store_->get(fused);
+    if (fused.empty()) return result;
+    result.chunks = store_->get(fused);
+
+    // --- Compute max raw vector cosine (top-1) for retrieval guard ---
+    if (!first_qv.empty() && !result.chunks.empty()) {
+        InMemoryVectorStore::normalize(first_qv);
+        float best = 0.0f;
+        for (const auto& c : result.chunks) {
+            if (c.embedding.empty()) continue;
+            double dot = 0;
+            size_t n = std::min(first_qv.size(), c.embedding.size());
+            for (size_t i = 0; i < n; ++i) dot += double(first_qv[i]) * c.embedding[i];
+            if (dot > best) best = float(dot);
+        }
+        result.max_score = best;
+    }
+
+    return result;
 }
 
 std::vector<Chunk> Retriever::retrieve_web(const std::string& question,
@@ -397,7 +427,9 @@ RetrievalOutcome Retriever::retrieve(const std::string& question) const {
 
     // Both retrievals are started by the pipeline in parallel; this
     // convenience path runs them sequentially (used in console diagnostics).
-    out.pdf_chunks = retrieve_store(out.queries, static_cast<size_t>(out.top_k));
+    StoreResult store_result = retrieve_store(out.queries, static_cast<size_t>(out.top_k));
+    out.pdf_chunks = std::move(store_result.chunks);
+    out.max_score = store_result.max_score;
     out.web_chunks = retrieve_web(question, out.queries,
                                   static_cast<size_t>(out.top_k),
                                   &out.web_warning);

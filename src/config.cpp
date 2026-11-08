@@ -84,6 +84,12 @@ Config Config::load(const std::string& path, std::string* err) {
     read_if(j, "request_timeout", c.request_timeout);
     read_if(j, "max_history_messages", c.max_history_messages);
     read_if(j, "rerank_top_n", c.rerank_top_n);
+    read_if(j, "rerank_max_candidates", c.rerank_max_candidates);
+    read_if(j, "rerank_min_score", c.rerank_min_score);
+    read_if(j, "rerank_skip_margin", c.rerank_skip_margin);
+    read_if(j, "fast_path_enabled", c.fast_path_enabled);
+    read_if(j, "fast_path_max_words", c.fast_path_max_words);
+    read_if(j, "map_reduce_threshold_tokens", c.map_reduce_threshold_tokens);
     read_if(j, "context_budget_tokens", c.context_budget_tokens);
     read_if(j, "num_ctx", c.num_ctx);
     read_if(j, "num_predict_draft", c.num_predict_draft);
@@ -95,6 +101,37 @@ Config Config::load(const std::string& path, std::string* err) {
     read_if(j, "open_browser", c.open_browser);
     read_if(j, "allow_upload_from_remote", c.allow_upload_from_remote);
     read_if(j, "upload_max_mb", c.upload_max_mb);
+    read_if(j, "min_score", c.min_score);
+    read_if(j, "creator", c.creator);
+    if (j.contains("generation") && j["generation"].is_object()) {
+        const auto& gen = j["generation"];
+        read_if(gen, "temperature", c.temperature);
+        read_if(gen, "top_p", c.top_p);
+        read_if(gen, "repeat_penalty", c.repeat_penalty);
+        read_if(gen, "response_language", c.response_language);
+    }
+
+    // --- Stage 1: Diagnosis keywords, stopwords, quality check, key-term relevance, expansion ---
+    read_if(j, "diagnosis_keywords", c.diagnosis_keywords);
+    read_if(j, "stopwords", c.stopwords);
+    if (j.contains("quality_check") && j["quality_check"].is_object()) {
+        const auto& qc = j["quality_check"];
+        read_if(qc, "enabled", c.quality_check_enabled);
+        read_if(qc, "min_answer_chars", c.quality_min_answer_chars);
+    }
+    if (j.contains("keyterm_relevance") && j["keyterm_relevance"].is_object()) {
+        const auto& kr = j["keyterm_relevance"];
+        read_if(kr, "enabled", c.keyterm_relevance_enabled);
+        read_if(kr, "min_matched_terms", c.keyterm_min_matched_terms);
+        read_if(kr, "prefix_length", c.keyterm_prefix_length);
+        read_if(kr, "case_insensitive", c.keyterm_case_insensitive);
+    }
+    if (j.contains("expansion") && j["expansion"].is_object()) {
+        const auto& exp = j["expansion"];
+        read_if(exp, "skip_for_simple", c.expansion_skip_for_simple);
+        read_if(exp, "skip_for_general", c.expansion_skip_for_general);
+        read_if(exp, "max_simple_words", c.expansion_max_simple_words);
+    }
 
     // Sanity clamps so a hand-edited config cannot break retrieval.
     if (c.chunk_size < 100) c.chunk_size = 100;
@@ -108,7 +145,23 @@ Config Config::load(const std::string& path, std::string* err) {
     if (c.num_ctx < 1024) c.num_ctx = 1024;
     if (c.num_predict_draft < 100) c.num_predict_draft = 100;
     if (c.rerank_top_n < 1) c.rerank_top_n = 1;
+    if (c.rerank_max_candidates < 1) c.rerank_max_candidates = 1;
+    if (c.rerank_max_candidates > 24) c.rerank_max_candidates = 24;
+    if (c.rerank_min_score < 0.0f) c.rerank_min_score = 0.0f;
+    if (c.rerank_min_score > 10.0f) c.rerank_min_score = 10.0f;
+    if (c.rerank_skip_margin < 0.0f) c.rerank_skip_margin = 0.0f;
+    if (c.rerank_skip_margin > 1.0f) c.rerank_skip_margin = 1.0f;
+    if (c.fast_path_max_words < 1) c.fast_path_max_words = 1;
+    if (c.map_reduce_threshold_tokens < 1000) c.map_reduce_threshold_tokens = 1000;
     if (c.upload_max_mb < 1) c.upload_max_mb = 1;
+    if (c.min_score < 0.0f) c.min_score = 0.0f;
+    if (c.min_score > 1.0f) c.min_score = 1.0f;
+    if (c.temperature < 0.0f) c.temperature = 0.0f;
+    if (c.temperature > 2.0f) c.temperature = 2.0f;
+    if (c.top_p < 0.0f) c.top_p = 0.0f;
+    if (c.top_p > 1.0f) c.top_p = 1.0f;
+    if (c.repeat_penalty < 0.0f) c.repeat_penalty = 0.0f;
+    if (c.repeat_penalty > 2.0f) c.repeat_penalty = 2.0f;
     // context_budget_tokens <= 0 means "auto": the space actually left for
     // retrieved chunks = num_ctx - system prompt - history - answer cap.
     // With defaults: 8192 - 900 - 600 - 800 = 5892 tokens.
@@ -121,6 +174,13 @@ Config Config::load(const std::string& path, std::string* err) {
             std::max(800, c.num_ctx - 900 - 600 - c.num_predict_draft);
     }
     if (c.selfcheck_model.empty()) c.selfcheck_model = c.helper_model;
+
+    // Stage 1 validation clamps
+    if (c.quality_min_answer_chars < 0) c.quality_min_answer_chars = 0;
+    if (c.keyterm_min_matched_terms < 0) c.keyterm_min_matched_terms = 0;
+    if (c.keyterm_prefix_length < 1) c.keyterm_prefix_length = 1;
+    if (c.keyterm_prefix_length > 20) c.keyterm_prefix_length = 20;
+    if (c.expansion_max_simple_words < 1) c.expansion_max_simple_words = 1;
 
     return c;
 }
@@ -155,6 +215,12 @@ nlohmann::json Config::to_json() const {
         {"request_timeout", request_timeout},
         {"max_history_messages", max_history_messages},
         {"rerank_top_n", rerank_top_n},
+        {"rerank_max_candidates", rerank_max_candidates},
+        {"rerank_min_score", rerank_min_score},
+        {"rerank_skip_margin", rerank_skip_margin},
+        {"fast_path_enabled", fast_path_enabled},
+        {"fast_path_max_words", fast_path_max_words},
+        {"map_reduce_threshold_tokens", map_reduce_threshold_tokens},
         {"context_budget_tokens", context_budget_tokens},
         {"num_ctx", num_ctx},
         {"num_predict_draft", num_predict_draft},
@@ -166,7 +232,54 @@ nlohmann::json Config::to_json() const {
         {"open_browser", open_browser},
         {"allow_upload_from_remote", allow_upload_from_remote},
         {"upload_max_mb", upload_max_mb},
+        {"min_score", min_score},
+        {"creator", creator},
+        {"generation", {
+            {"temperature", temperature},
+            {"top_p", top_p},
+            {"repeat_penalty", repeat_penalty},
+            {"response_language", response_language}
+        }},
+        {"diagnosis_keywords", diagnosis_keywords},
+        {"stopwords", stopwords},
+        {"quality_check", {
+            {"enabled", quality_check_enabled},
+            {"min_answer_chars", quality_min_answer_chars}
+        }},
+        {"keyterm_relevance", {
+            {"enabled", keyterm_relevance_enabled},
+            {"min_matched_terms", keyterm_min_matched_terms},
+            {"prefix_length", keyterm_prefix_length},
+            {"case_insensitive", keyterm_case_insensitive}
+        }},
+        {"expansion", {
+            {"skip_for_simple", expansion_skip_for_simple},
+            {"skip_for_general", expansion_skip_for_general},
+            {"max_simple_words", expansion_max_simple_words}
+        }}
     };
+}
+
+ChatOptions Config::chat_options(int num_predict, double temperature) const {
+    ChatOptions o;
+    o.temperature = temperature;
+    o.num_predict = num_predict;
+    o.num_ctx = num_ctx;
+    o.num_gpu = -1;             // GPU / partial offload: Ollama's default
+    o.think = false;
+    o.keep_alive = keep_alive;  // "-1" -> never unload
+    return o;
+}
+
+ChatOptions Config::embed_options() const {
+    ChatOptions o;
+    o.temperature = 0.0;
+    o.num_predict = -1;
+    o.num_ctx = 0;              // embeddings ignore the chat context window
+    o.num_gpu = 0;              // bge-m3 always on CPU
+    o.think = false;
+    o.keep_alive = keep_alive;  // "-1" -> never unload
+    return o;
 }
 
 fs::path Config::resolve(const std::string& rel) const {

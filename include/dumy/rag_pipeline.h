@@ -19,6 +19,19 @@
 
 namespace dumy {
 
+// Result of the startup preload (Step 1). Reported by GET /health so a
+// silently evicted model is visible instead of only showing up as latency.
+struct WarmupInfo {
+    bool attempted = false;
+    bool main_ready = false;    // 1-token chat call returned text
+    bool embed_ready = false;   // tiny embed call returned a vector
+    bool main_resident = false; // main model present in /api/ps afterwards
+    bool embed_on_cpu = false;  // embed model present in /api/ps with size_vram == 0
+    long long main_load_ms = 0;
+    long long embed_load_ms = 0;
+    std::string note;
+};
+
 struct AnswerResult {
     std::string answer;                 // final text (labels + footer included)
     std::vector<Chunk> used_chunks;     // chunks that made it into the context
@@ -50,6 +63,15 @@ public:
     // Checks Ollama, resolves chat/helper models with fallbacks.
     // Returns false when Ollama is unreachable (clear message in `err`).
     bool initialize(std::string* err);
+
+    // Preloads the main model (num_predict=1, identical options to a real
+    // draft) and bge-m3 (CPU), then verifies both through /api/ps.
+    // Called at startup BEFORE the server reports ready.
+    bool warmup(std::string* err = nullptr);
+    const WarmupInfo& warmup_info() const { return warmup_; }
+    std::vector<RunningModel> running_models(std::string* err = nullptr) const {
+        return ollama_.running_models(err);
+    }
 
     bool ollama_ok() const { return ollama_ok_; }
     // Live Ollama probe with a hard timeout cap (GET /health uses 2 s so a
@@ -95,6 +117,7 @@ private:
     std::string helper_model_;     // "models.helper" - expand/rerank/summarize
     std::string selfcheck_model_;  // "models.selfcheck" - fact-check pass
     std::string embedding_model_;
+    WarmupInfo warmup_;
 };
 
 }  // namespace dumy

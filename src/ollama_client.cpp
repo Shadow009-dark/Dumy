@@ -126,12 +126,29 @@ nlohmann::json options_json(const ChatOptions& o) {
     nlohmann::json j = {{"temperature", o.temperature}};
     if (o.num_predict > 0) j["num_predict"] = o.num_predict;
     if (o.num_ctx > 0) j["num_ctx"] = o.num_ctx;
+    // num_gpu changes the load plan: -1 (default) must be omitted so Ollama
+    // uses its own default, 0 forces CPU. Every caller for a given model has
+    // to send the same value or Ollama reloads the model mid-request.
+    if (o.num_gpu >= 0) j["num_gpu"] = o.num_gpu;
     return j;
 }
 
 // Top-level "keep_alive" field shared by /api/chat and /api/embed.
+// Step 1: every request keeps its model resident - never unload (-1).
 nlohmann::json keep_alive_json(const ChatOptions& o) {
-    return nlohmann::json(o.keep_alive.empty() ? "5m" : o.keep_alive);
+    if (o.keep_alive.empty() || o.keep_alive == "-1" || o.keep_alive == "default")
+        return nlohmann::json(-1);
+    // A plain integer string ("0", "300") is sent as a JSON number.
+    bool numeric = !o.keep_alive.empty();
+    for (char c : o.keep_alive)
+        if (!std::isdigit(static_cast<unsigned char>(c)) && c != '-') numeric = false;
+    if (numeric) {
+        try {
+            return nlohmann::json(std::stoll(o.keep_alive));
+        } catch (...) {
+        }
+    }
+    return nlohmann::json(o.keep_alive);  // "30m" style duration
 }
 
 // Reads one duration field (Ollama reports nanoseconds) into milliseconds.
@@ -297,9 +314,16 @@ bool OllamaClient::embed(const std::string& model,
     std::vector<std::string> clean;
     clean.reserve(inputs.size());
     for (const auto& t : inputs) clean.push_back(sanitize_utf8(t));
+    // bge-m3 must always run on CPU: it is small, and keeping it off the GPU
+    // leaves the whole 6 GB of VRAM for the chat model. num_gpu=0 is a
+    // load-affecting option, so it is sent on EVERY embed call (warm-up too).
+    ChatOptions emb;
+    emb.num_gpu = 0;
+    emb.keep_alive = "-1";
     nlohmann::json body = {{"model", model},
                            {"input", clean},
-                           {"keep_alive", "30m"}};  // keep the embed model resident
+                           {"keep_alive", keep_alive_json(emb)},
+                           {"options", options_json(emb)}};
 
     RequestSpec spec;
     spec.url = base_url_ + "/api/embed";
@@ -348,6 +372,29 @@ bool OllamaClient::ping(std::string* err, int timeout_sec) const {
     const auto noop = [](const std::string&) {};
     std::string response;
     return do_request(spec, noop, response, err);
+}
+
+std::vector<RunningModel> OllamaClient::running_models(std::string* err) const {
+    std::vector<RunningModel> out;
+    RequestSpec spec;
+    spec.url = base_url_ + "/api/ps";
+    spec.timeout_sec = 5;
+    const auto noop = [](const std::string&) {};
+    std::string response;
+    if (!do_request(spec, noop, response, err)) return out;
+    try {
+        auto j = nlohmann::json::parse(response);
+        for (const auto& m : j.value("models", nlohmann::json::array())) {
+            RunningModel rm;
+            rm.name = m.value("name", m.value("model", std::string()));
+            rm.size = m.value("size", 0LL);
+            rm.size_vram = m.value("size_vram", 0LL);
+            if (!rm.name.empty()) out.push_back(std::move(rm));
+        }
+    } catch (const std::exception& e) {
+        if (err) *err = std::string("bad /api/ps response: ") + e.what();
+    }
+    return out;
 }
 
 std::vector<std::string> OllamaClient::list_models(std::string* err) const {

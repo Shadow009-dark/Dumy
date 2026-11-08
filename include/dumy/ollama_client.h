@@ -20,8 +20,16 @@ struct ChatOptions {
     double temperature = 0.2;
     int num_predict = -1;   // max new tokens; -1 = model default
     int num_ctx = 8192;
+    int num_gpu = -1;       // -1 = model default; 0 = force CPU (embeddings)
     bool think = false;     // keep qwen3-style reasoning off for latency
-    std::string keep_alive = "5m";  // how long Ollama keeps the model in memory
+    std::string keep_alive = "-1";  // -1 = never unload (Step 1 requirement)
+};
+
+// One entry of GET /api/ps (models currently loaded by Ollama).
+struct RunningModel {
+    std::string name;
+    long long size = 0;       // total bytes
+    long long size_vram = 0;  // bytes resident in VRAM (0 = CPU only)
 };
 
 // Timing Ollama reports for a single call. `load_ms` > 0 means the model had
@@ -71,6 +79,9 @@ public:
 
     // Installed model names (GET /api/tags).
     std::vector<std::string> list_models(std::string* err = nullptr) const;
+
+    // Models currently loaded in memory (GET /api/ps). Empty on failure.
+    std::vector<RunningModel> running_models(std::string* err = nullptr) const;
 
     const std::string& base_url() const { return base_url_; }
 

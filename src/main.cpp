@@ -319,6 +319,17 @@ int main(int argc, char** argv) {
         log_warn("Ollama işləmədiyi üçün indeksləşdirmə təxirə salındı");
     }
 
+    // --- step 1: preload both models BEFORE the server reports ready --------
+    // Ingest runs first because it loads bge-m3; warming afterwards means no
+    // model load is left for the first real question.
+    if (ollama_ok) {
+        log_info("Modellər yaddaşa yüklənir (warm-up)...");
+        std::string werr;
+        if (!pipeline.warmup(&werr)) {
+            log_warn("Warm-up tamamlanmadı: " + werr);
+        }
+    }
+
     // --- modes --------------------------------------------------------------
     if (args.console_mode) {
         return run_console(pipeline, indexer, cfg);

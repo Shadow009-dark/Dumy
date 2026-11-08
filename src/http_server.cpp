@@ -153,6 +153,19 @@ bool HttpServer::start(std::string* err) {
                 impl_->ollama_checked_at = now;
             }
         }
+        // Step 1: models Ollama currently has loaded (GET /api/ps) and the
+        // startup warm-up result, so an evicted model is visible here.
+        nlohmann::json loaded = nlohmann::json::array();
+        if (alive) {
+            std::string ps_err;
+            for (const auto& m : pipeline_.running_models(&ps_err)) {
+                loaded.push_back({{"name", m.name},
+                                  {"size", m.size},
+                                  {"size_vram", m.size_vram},
+                                  {"cpu_only", m.size_vram == 0}});
+            }
+        }
+        const WarmupInfo& w = pipeline_.warmup_info();
         nlohmann::json body = {
             {"status", "ok"},
             {"ollama", alive},
@@ -163,6 +176,15 @@ bool HttpServer::start(std::string* err) {
             {"web_search_enabled", cfg_.web_search_enabled},
             {"sessions", sessions_.session_count()},
             {"chunks", indexer_.chunk_count()},
+            {"loaded_models", loaded},
+            {"warmup", {{"attempted", w.attempted},
+                        {"main_ready", w.main_ready},
+                        {"main_resident", w.main_resident},
+                        {"embed_ready", w.embed_ready},
+                        {"embed_on_cpu", w.embed_on_cpu},
+                        {"main_load_ms", w.main_load_ms},
+                        {"embed_load_ms", w.embed_load_ms},
+                        {"note", w.note}}},
         };
         reply_json(res, 200, body);
     });
@@ -437,28 +459,9 @@ bool HttpServer::start(std::string* err) {
         return false;
     }
 
-    // --- model warm-up: load the draft model into the GPU with a 1-token
-    // request so the FIRST real question skips the multi-second model-load
-    // delay. Background + best-effort; failures are logged, never fatal.
-    {
-        const std::string draft = pipeline_.chat_model();
-        const std::string url = cfg_.ollama_url;
-        const std::string keep = cfg_.keep_alive;
-        const int warm_ctx = cfg_.num_ctx;  // match real calls -> no later reload
-        std::thread([draft, url, keep, warm_ctx] {
-            OllamaClient warm(url, 180);
-            ChatOptions opts;
-            opts.num_predict = 1;
-            opts.num_ctx = warm_ctx;
-            opts.keep_alive = keep;
-            std::string werr;
-            const std::string r = warm.chat(draft, {{"user", "salam"}}, opts, &werr);
-            if (r.empty() && !werr.empty())
-                log_warn("model warm-up failed (first question will be slower): " + werr);
-            else
-                log_info("model warm-up done (" + draft + " ready)");
-        }).detach();
-    }
+    // Model warm-up lives in main.cpp (RagPipeline::warmup) and runs BEFORE
+    // the server reports ready, so /health never claims "ready" while the
+    // first question still pays a cold model load.
     return true;
 }
 

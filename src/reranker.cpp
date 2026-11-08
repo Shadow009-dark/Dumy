@@ -94,14 +94,9 @@ std::vector<Chunk> Reranker::rerank(const std::string& query,
         return out;
     }
 
-    ChatOptions opts;
-    opts.temperature = 0.0;
-    opts.num_predict = 600;  // 24 chunks * {"id":N,"score":N} need room
-    // Match the draft model's context size: Ollama reloads a model when
-    // num_ctx changes, so a different value here forced a second (and
-    // needless) 7B load between rerank and draft on a 6 GB GPU.
-    opts.num_ctx = cfg_.num_ctx;
-    opts.keep_alive = cfg_.keep_alive;
+    // Centralized load-affecting options (num_ctx, keep_alive): a different
+    // num_ctx here would force a second 7B load between rerank and draft.
+    ChatOptions opts = cfg_.chat_options(600, 0.0);
 
     std::string llm_err;
     log_info("rerank: calling " + model + " (" + std::to_string(prompt.str().size()) +

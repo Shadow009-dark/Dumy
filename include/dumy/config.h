@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "dumy/common.h"
+#include "dumy/ollama_client.h"
 
 namespace dumy {
 
@@ -52,13 +53,33 @@ struct Config {
     int request_timeout = 300;          // seconds per Ollama call
     int max_history_messages = 8;       // messages kept per session
     int rerank_top_n = 8;               // chunks kept after LLM reranking
-    int context_budget_tokens = 4500;   // above this the pipeline switches to map-reduce
+    int rerank_max_candidates = 6;      // Step 4: max chunks sent to the LLM reranker
+    float rerank_min_score = 8.0f;      // Step 3: keep only chunks scored >= this (0-10)
+    float rerank_skip_margin = 0.05f;   // Step 4: skip rerank when cosine top-1 is this far ahead
+    int context_budget_tokens = 0;      // 0 = auto (num_ctx - prompt/history/answer)
+    int map_reduce_threshold_tokens = 6000;  // Step 3: only above this map-reduce runs
     int num_ctx = 8192;                 // Ollama context window (6 GB VRAM friendly)
-    int num_predict_draft = 850;        // cap on draft answer length (tokens)
-    std::string keep_alive = "30m";     // how long Ollama keeps models loaded
+    int num_predict_draft = 1000;       // cap on draft answer length (tokens)
+    std::string keep_alive = "-1";      // -1 = Ollama never unloads the model
+
+    // --- Step 5: fast path for short factual questions ---------------------
+    bool fast_path_enabled = true;
+    int fast_path_max_words = 12;       // SimpleFact questions up to this -> no rerank/map-reduce
     bool auto_ingest = true;            // index new PDFs at startup
     bool ocr_enabled = false;           // OCR extension point (Tesseract), off by default
     std::string ocr_languages = "aze+eng";
+
+    // --- Retrieval guard ---
+    float min_score = 0.3f;             // minimum top-chunk cosine similarity to call LLM
+
+    // --- Generation settings ---
+    float temperature = 0.15f;          // sampling temperature (0.1-0.2)
+    float top_p = 0.9f;                 // nucleus sampling
+    float repeat_penalty = 1.1f;        // repetition penalty
+    std::string response_language = "az"; // forced response language
+
+    // --- Identity ---
+    std::string creator = "DUMY Team";  // bot creator name for identity questions
 
     // --- Web UI / upload ---
     std::string web_folder = "web";             // optional UI override (else embedded)
@@ -66,12 +87,72 @@ struct Config {
     bool allow_upload_from_remote = false;       // PDF upload: localhost only by default
     int upload_max_mb = 200;                     // max PDF upload size
 
+    // --- Stage 1: Diagnosis keywords (configurable) ---
+    std::vector<std::string> diagnosis_keywords = {
+        "niyə saralır", "niye saralir",
+        "quruyur", "curuyur",
+        "çürüyur", "curuyur",
+        "solur",
+        "ləkə", "leke",
+        "xanlı", "xanli",
+        "vurulub", "vuruldu",
+        "xəstəlik", "xestelik",
+        "simptom", "simptom",
+        "müalicə", "mualice",
+        "niyə öl", "niye ol",
+        "doza", "dose",
+        "antibiot", "peyvənd", "peyvend",
+        "vaksin", "dərman", "derman",
+        "nə üçün", "ne ucun",
+        "ağrır", "agrir",
+        "qızdır", "qizdir",
+        "xəstə", "xeste",
+        "əlamət", "elamet",
+        "diaqnoz", "sebeb",
+        "səbəb", "why",
+        "treatment", "disease", "symptom"
+    };
+
+    // --- Stage 1: Stopwords for key-term extraction ---
+    std::vector<std::string> stopwords = {
+        "niyə", "niye", "necə", "nece", "nədir", "nedir",
+        "kim", "harada", "harda", "ne zaman", "ne vaxt",
+        "nə", "ne", "nə üçün", "ne ucun",
+        "how", "why", "what", "where", "when", "who",
+        "is", "are", "was", "were", "the", "a", "an",
+        "ve", "ile", "için", "üçün", "bir", "bu", "o",
+        "hansi", "hansı", "hansı", "hansili",
+        "bunun", "şu", "şunun", "onun"
+    };
+
+    // --- Stage 1: Answer quality check ---
+    bool quality_check_enabled = true;
+    int quality_min_answer_chars = 80;
+
+    // --- Stage 1: Key-term relevance check ---
+    bool keyterm_relevance_enabled = true;
+    int keyterm_min_matched_terms = 1;
+    int keyterm_prefix_length = 5;
+    bool keyterm_case_insensitive = true;
+
+    // --- Stage 1: Query expansion control ---
+    bool expansion_skip_for_simple = true;
+    bool expansion_skip_for_general = true;
+    int expansion_max_simple_words = 10;
+
     // --- Runtime (not from JSON) ---
     std::string config_path;            // absolute path of the loaded config file
     std::string base_dir;               // folder of the config file (project root)
 
     // Load a config file; on missing file or bad JSON fills `err` and returns defaults.
     static Config load(const std::string& path, std::string* err = nullptr);
+
+    // --- Centralized Ollama options (Step 1) -------------------------------
+    // Every call to a model MUST use these helpers: num_ctx / num_gpu /
+    // keep_alive are load-affecting, so a mismatch makes Ollama reload the
+    // model (the 5-20 s delay this task removes).
+    ChatOptions chat_options(int num_predict, double temperature) const;
+    ChatOptions embed_options() const;   // bge-m3: num_gpu=0 (CPU), keep_alive=-1
 
     nlohmann::json to_json() const;
 

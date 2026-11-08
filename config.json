@@ -2,7 +2,7 @@
   "ollama_url": "http://localhost:11434",
   "models": {
     "embed": "bge-m3",
-    "helper": "qwen2.5:3b",
+    "helper": "qwen2.5:7b",
     "draft": "qwen2.5:7b",
     "selfcheck": "qwen2.5:7b"
   },
@@ -25,7 +25,7 @@
   "open_browser": true,
   "allow_upload_from_remote": false,
   "upload_max_mb": 200,
-  "web_search_enabled": true,
+  "web_search_enabled": false,
   "searxng_url": "http://localhost:8080",
   "search_languages": [
     "az",
@@ -33,7 +33,7 @@
   ],
   "web_top_results": 8,
   "web_max_pages": 6,
-  "web_fetch_timeout": 10,
+  "web_fetch_timeout": 1,
   "web_cache_ttl_hours": 168,
   "trusted_domains": [
     "fao.org",
@@ -50,11 +50,74 @@
   "request_timeout": 300,
   "max_history_messages": 8,
   "rerank_top_n": 8,
+  "rerank_max_candidates": 6,
+  "rerank_min_score": 8.0,
+  "rerank_skip_margin": 0.05,
+  "fast_path_enabled": true,
+  "fast_path_max_words": 12,
+  "map_reduce_threshold_tokens": 6000,
+  "min_score": 0.5,
   "num_ctx": 8192,
   "num_predict_draft": 1000,
-  "context_budget_tokens": 5892,
-  "keep_alive": "30m",
+  "context_budget_tokens": 0,
+  "keep_alive": "-1",
   "auto_ingest": true,
   "ocr_enabled": false,
-  "ocr_languages": "aze+eng"
+  "ocr_languages": "aze+eng",
+  "creator": "DUMY Team",
+  "generation": {
+    "temperature": 0.15,
+    "top_p": 0.9,
+    "repeat_penalty": 1.1,
+    "response_language": "az"
+  },
+  "diagnosis_keywords": [
+    "niyə saralır", "niye saralir",
+    "quruyur", "curuyur",
+    "çürüyur", "curuyur",
+    "solur",
+    "ləkə", "leke",
+    "xanlı", "xanli",
+    "vurulub", "vuruldu",
+    "xəstəlik", "xestelik",
+    "simptom", "simptom",
+    "müalicə", "mualice",
+    "niyə öl", "niye ol",
+    "doza", "dose",
+    "antibiot", "peyvənd", "peyvend",
+    "vaksin", "dərman", "derman",
+    "nə üçün", "ne ucun",
+    "ağrır", "agrir",
+    "qızdır", "qizdir",
+    "xəstə", "xeste",
+    "əlamət", "elamet",
+    "diaqnoz", "sebeb",
+    "səbəb", "why",
+    "treatment", "disease", "symptom"
+  ],
+  "stopwords": [
+    "niyə", "niye", "necə", "nece", "nədir", "nedir",
+    "kim", "harada", "harda", "ne zaman", "ne vaxt",
+    "nə", "ne", "nə üçün", "ne ucun",
+    "how", "why", "what", "where", "when", "who",
+    "is", "are", "was", "were", "the", "a", "an",
+    "ve", "ile", "için", "üçün", "bir", "bu", "o",
+    "hansi", "hansı", "hansı", "hansili",
+    "bunun", "şu", "şunun", "onun"
+  ],
+  "quality_check": {
+    "min_answer_chars": 80,
+    "enabled": true
+  },
+  "keyterm_relevance": {
+    "enabled": true,
+    "min_matched_terms": 1,
+    "prefix_length": 5,
+    "case_insensitive": true
+  },
+  "expansion": {
+    "skip_for_simple": true,
+    "skip_for_general": true,
+    "max_simple_words": 10
+  }
 }
