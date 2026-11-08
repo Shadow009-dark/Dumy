@@ -685,9 +685,21 @@ AnswerResult RagPipeline::answer(const std::string& question,
         std::string warning;
     };
     std::future<WebOut> web_fut;
-    const bool web_enabled = cfg_.web_search_enabled && !short_non_topic;
+    // Step 6: web runs in parallel with PDF retrieval, but never for questions
+    // that are answered directly (identity / arithmetic / date-time) and never
+    // when the config flag is off. With config.json web_search_enabled=false
+    // the Wikipedia fallback is not called at all.
+    const bool direct_answer = is_identity_question(q) ||
+                               is_arithmetic_question(q) ||
+                               is_datetime_question(q);
+    const bool web_enabled =
+        cfg_.web_search_enabled && !short_non_topic && !direct_answer;
     if (cfg_.web_search_enabled && short_non_topic) {
         log_info("fastpath: web skipped (short non-topic message)");
+    } else if (cfg_.web_search_enabled && direct_answer) {
+        log_info("fastpath: web skipped (identity/arithmetic/date-time question)");
+    } else if (!cfg_.web_search_enabled) {
+        log_info("web search disabled in config.json (web_search_enabled=false)");
     }
     if (web_enabled) {
         web_fut = std::async(std::launch::async, [&] {
