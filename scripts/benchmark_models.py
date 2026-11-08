@@ -103,10 +103,16 @@ DRAFT_RE = re.compile(
 )
 
 
-def last_draft_timing(log_path: Path) -> tuple[float, int, int]:
-    """Returns (gen_ms, eval_tokens, load_ms) of the last draft call."""
+def last_draft_timing(log_path: Path, offset: int = 0) -> tuple[float, int, int]:
+    """Returns (gen_ms, eval_tokens, load_ms) of the last draft call.
+
+    Only bytes written for THIS request are read, so an instant fast-path
+    answer (identity/arithmetic) does not inherit tok/s from the previous one.
+    """
     try:
-        text = log_path.read_text(encoding="utf-8", errors="replace")
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            f.seek(offset)
+            text = f.read()
     except OSError:
         return 0.0, 0, 0
     matches = list(DRAFT_RE.finditer(text))
@@ -184,21 +190,24 @@ def run_model(model: str, port: int, limit: int, pull: bool) -> list[dict]:
                 answer, err = "", str(exc)
             wall = time.time() - t0
 
-            gen_ms, etok, load_ms = last_draft_timing(log_path)
+            gen_ms, etok, load_ms = last_draft_timing(log_path, before)
             tok_s = (etok / (gen_ms / 1000.0)) if gen_ms > 0 else 0.0
             low = answer.lower()
+            # Keywords are alternatives (a weekday answer contains ONE of
+            # bazar/çərşənbə/cümə/şənbə), never all of them.
             ok = (not err and len(answer.strip()) >= 3
-                  and all(k.lower() in low for k in keywords))
+                  and any(k.lower() in low for k in keywords))
             rows.append({"model": model, "n": i, "q": question, "sec": wall,
                          "tok_s": tok_s, "load_ms": load_ms, "ok": ok,
                          "answer": answer, "err": err})
             print(f"  {i:2d}. {wall:5.1f}s  {tok_s:5.1f} tok/s  "
                   f"load={load_ms:5d}ms  {'PASS' if ok else 'FAIL'}  {question}",
                   flush=True)
-            if not ok and answer:
-                print(f"      -> {answer[:140].replace(chr(10), ' ')}", flush=True)
-            elif err:
-                print(f"      -> error: {err[:140]}", flush=True)
+            if not ok:
+                if err:
+                    print(f"      -> error: {err[:140]}", flush=True)
+                elif answer:
+                    print(f"      -> {answer[:140].replace(chr(10), ' ')}", flush=True)
     finally:
         stop_server(proc)
     return rows
