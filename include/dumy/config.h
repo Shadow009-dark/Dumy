@@ -71,6 +71,10 @@ struct Config {
 
     // --- Retrieval guard ---
     float min_score = 0.3f;             // minimum top-chunk cosine similarity to call LLM
+    // --- Relevance gate: off-topic PDF hits must not become citations ------
+    bool relevance_check_enabled = true;  // lexical check + cheap yes/no LLM check
+    float relevance_min_overlap = 0.34f;  // share of question key terms that must appear
+    float relevance_check_score = 0.75f;  // top cosine at which a partial lexical match is enough
 
     // --- Generation settings ---
     float temperature = 0.15f;          // sampling temperature (0.1-0.2)

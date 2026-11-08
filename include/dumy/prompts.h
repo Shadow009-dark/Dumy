@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "dumy/common.h"
 #include "dumy/vector_store.h"
 
 namespace dumy {
@@ -328,6 +329,12 @@ inline const char* NO_CONTEXT_NOTE =
     "məlumat tapılmadı, ona görə cavab modelin ümumi bilikləri əsasında verilib "
     "[Ümumi bilik].";
 
+// Used when retrieval found only topically-related but irrelevant PDF text:
+// the answer must say the uploaded documents do not cover the question.
+inline const char* NO_RELEVANT_CONTEXT_NOTE =
+    "Qeyd: yüklənmiş sənədlərdə (PDF) bu sual üzrə məlumat tapılmadı - cavab ümumi "
+    "biliklər əsasında verilib [Ümumi bilik]. Dəqiqlik üçün məlumatı müstəqil yoxlayın.";
+
 // ---------------------------------------------------------------------------
 // Prompt builders
 // ---------------------------------------------------------------------------
@@ -400,6 +407,51 @@ inline std::string build_draft_user_message(const std::string& question) {
            "Yalnız yuxarıdakı mətn-daxi etiketləri işlət.\n\n"
            "SUAL: " + question;
     return s;
+}
+
+// ---------------------------------------------------------------------------
+// Relevance gate (off-topic PDF hits must not become citations)
+// ---------------------------------------------------------------------------
+// Key noun(s) of a question, folded for matching: words of >= 4 letters that
+// are not question words / stopwords.
+inline std::vector<std::string> relevance_key_terms(const std::string& question) {
+    static const char* STOP[] = {
+        "nece", "nedir", "hansi", "hansini", "hansidir", "ucun", "niye",
+        "neden", "ne", "bir", "ve", "ile", "bu", "o", "kim", "harada",
+        "qeder", "lazim", "lazimdir", "olur", "edir", "eder", "olacaq",
+        "vardir", "yoxdur", "daha", "cox", "az", "her", "butun", "kimi",
+        "gore", "amma", "ancaq", "lakin", "hesabla", "hesablanir", "goster",
+        // generic actions: "necə hazırlanır" must not count as a key noun
+        "hazirlanir", "hazirlanmasi", "hazirlanma", "hazirlamaq", "hazirla",
+        "pisirilir", "pisirmek", "pishirilir", "pishirmek", "verilir", "vermek",
+        "artirilir", "artirmaq", "azaltmaq", "istifade", "istifadesi", "etmek",
+        "etmeli", "olmali", "what", "how", "why", "is", "are", "the", "a", "an", "much",
+        "many", "does", "do", "for", "of", "in", "on"
+    };
+    std::vector<std::string> out;
+    for (const auto& w : az_words(question)) {
+        if (w.size() < 4) continue;
+        bool stop = false;
+        for (const char* s : STOP)
+            if (w == s) { stop = true; break; }
+        if (stop) continue;
+        if (std::find(out.begin(), out.end(), w) == out.end()) out.push_back(w);
+    }
+    return out;
+}
+
+// Cheap yes/no check: does this snippet really answer this question? The
+// caller uses it only when lexical overlap already failed.
+inline std::string build_relevance_check_user_message(const std::string& question,
+                                                      const std::string& snippets) {
+    return "Sən retrieval nəzarətçisisən. Aşağıdakı KONTEKST-in istifadəçinin SUALINA "
+           "həqiqətən cavab verib-vermədiyini yoxla.\n"
+           "QAYDALAR:\n"
+           "- Yalnız KONTEKSTƏ bax, öz ümumi biliklərinə arxalanma.\n"
+           "- Mövzu eyni görünsə də, sualın soruşduğu konkret şey kontekstdə yoxdursa cavab XEYR-dir.\n"
+           "- Sözün yalnız bir hissəsi üst-üstə düşürsə (məsələn \"şəkər\" və \"şəkərçörək\"), bu cavab sayılmır.\n"
+           "- Yalnız bir söz yaz: BELI və ya XEYR.\n\n"
+           "SUAL: " + question + "\n\nKONTEKST:\n" + snippets + "\n\nCAVAB:";
 }
 
 // Compact verification prompt: the checker returns a SHORT structured verdict

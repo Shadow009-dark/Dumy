@@ -102,6 +102,9 @@ Config Config::load(const std::string& path, std::string* err) {
     read_if(j, "allow_upload_from_remote", c.allow_upload_from_remote);
     read_if(j, "upload_max_mb", c.upload_max_mb);
     read_if(j, "min_score", c.min_score);
+    read_if(j, "relevance_check_enabled", c.relevance_check_enabled);
+    read_if(j, "relevance_min_overlap", c.relevance_min_overlap);
+    read_if(j, "relevance_check_score", c.relevance_check_score);
     read_if(j, "creator", c.creator);
     if (j.contains("generation") && j["generation"].is_object()) {
         const auto& gen = j["generation"];
@@ -156,6 +159,10 @@ Config Config::load(const std::string& path, std::string* err) {
     if (c.upload_max_mb < 1) c.upload_max_mb = 1;
     if (c.min_score < 0.0f) c.min_score = 0.0f;
     if (c.min_score > 1.0f) c.min_score = 1.0f;
+    if (c.relevance_min_overlap < 0.0f) c.relevance_min_overlap = 0.0f;
+    if (c.relevance_min_overlap > 1.0f) c.relevance_min_overlap = 1.0f;
+    if (c.relevance_check_score < 0.0f) c.relevance_check_score = 0.0f;
+    if (c.relevance_check_score > 1.0f) c.relevance_check_score = 1.0f;
     if (c.temperature < 0.0f) c.temperature = 0.0f;
     if (c.temperature > 2.0f) c.temperature = 2.0f;
     if (c.top_p < 0.0f) c.top_p = 0.0f;
@@ -233,6 +240,9 @@ nlohmann::json Config::to_json() const {
         {"allow_upload_from_remote", allow_upload_from_remote},
         {"upload_max_mb", upload_max_mb},
         {"min_score", min_score},
+        {"relevance_check_enabled", relevance_check_enabled},
+        {"relevance_min_overlap", relevance_min_overlap},
+        {"relevance_check_score", relevance_check_score},
         {"creator", creator},
         {"generation", {
             {"temperature", temperature},

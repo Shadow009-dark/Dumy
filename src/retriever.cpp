@@ -163,6 +163,7 @@ std::vector<std::string> Retriever::expand_query(const std::string& question,
                        "Example: \"all animal diseases\" -> [\"qoyun xəstəlikləri\", "
                        "\"mal xəstəlikləri\", \"poultry diseases\", "
                        "\"infectious livestock diseases\"]\n"
+                       "QAYDA: Mürəkkəb sözü HİSSƏLƏRƏ BÖLMƏ (məsələn \"şəkərçörək\" -> \"şəkər\" YOX; tam sözü saxla).\n"
                        "Reply with ONLY the JSON array.";
 
     // Centralized options: with helper == draft model a different num_ctx
@@ -220,6 +221,37 @@ std::vector<std::string> Retriever::expand_query(const std::string& question,
                             "\"cattle diseases\", \"poultry diseases\"]."}},
             opts, &err, &exp_timing);
         subs = extract(reply);
+    }
+
+    // Never let expansion split a compound question word: "şəkərçörək" must
+    // not become the much broader "şəkər" (that is how an agriculture PDF
+    // about sugar beet ended up as a citation for a pastry recipe).
+    {
+        const std::vector<std::string> qwords = az_words(question);
+        std::vector<std::string> kept_subs;
+        kept_subs.reserve(subs.size());
+        for (const auto& s : subs) {
+            bool splits = false;
+            for (const auto& t : az_words(s)) {
+                if (t.size() < 4) continue;
+                for (const auto& w : qwords) {
+                    if (w.size() < t.size() + 3 || w == t) continue;
+                    if (w.rfind(t, 0) != 0) continue;
+                    if (!az_is_inflection(w.substr(t.size()))) {
+                        splits = true;
+                        break;
+                    }
+                }
+                if (splits) break;
+            }
+            if (splits) {
+                log_warn("query expansion: dropped sub-query '" + s +
+                         "' (splits a compound word of the question)");
+                continue;
+            }
+            kept_subs.push_back(s);
+        }
+        subs.swap(kept_subs);
     }
     log_model_call("expand", model,
                    std::chrono::duration_cast<std::chrono::milliseconds>(

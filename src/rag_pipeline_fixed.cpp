@@ -730,6 +730,8 @@ AnswerResult RagPipeline::answer(const std::string& question,
     const std::vector<std::string> queries =
         short_non_topic ? std::vector<std::string>{q} : retriever_.expand_query(q, qtype);
     const double ms_expand = t_expand.ms();
+    log_info("expansion queries (" + std::to_string(queries.size()) + "): " +
+             join(queries, " | "));
 
     // --- 3. PDF hybrid retrieval + web search IN PARALLEL ------------------
     StageTimer t_parallel;
@@ -769,6 +771,9 @@ AnswerResult RagPipeline::answer(const std::string& question,
     std::vector<Chunk> pdf_chunks = std::move(pdf_result.chunks);
     const float pdf_score_margin = pdf_result.score_margin;  // Step 4 signal
     const double ms_pdf = t_parallel.ms();
+    log_info("retrieval scores: top1=" + std::to_string(pdf_result.max_score) +
+             " margin=" + std::to_string(pdf_result.score_margin) +
+             " chunks=" + std::to_string(pdf_chunks.size()));
 
     // Step 7: never attach unrelated PDF citations. When the best vector hit
     // is below min_score the matched chunks are noise (e.g. "Telefon nədir?"),
@@ -778,6 +783,81 @@ AnswerResult RagPipeline::answer(const std::string& question,
                  " < min_score " + std::to_string(cfg_.min_score) +
                  " - PDF context dropped");
         pdf_chunks.clear();
+    }
+    // --- 3b. Relevance gate: off-topic PDF hits must not become citations ---
+    // The cosine guard above cannot separate "şəkərçörək" from sugar-beet
+    // text (bge-m3 scores topically-related agri text high). Require a key
+    // noun of the question in a retained chunk, or ask the helper model a
+    // cheap yes/no question when lexical support is missing.
+    bool pdf_relevance_failed = false;
+    if (!pdf_chunks.empty() && cfg_.relevance_check_enabled) {
+        const std::vector<std::string> terms = relevance_key_terms(q);
+        const size_t probe = std::min<size_t>(pdf_chunks.size(), 6);
+        size_t matched = 0;
+        std::string missing;
+        for (const auto& t : terms) {
+            bool found = false;
+            for (size_t i = 0; i < probe && !found; ++i) {
+                for (const auto& w : az_words(pdf_chunks[i].text)) {
+                    if (az_words_match(t, w)) { found = true; break; }
+                }
+            }
+            if (found) {
+                ++matched;
+            } else {
+                if (!missing.empty()) missing += ",";
+                missing += t;
+            }
+        }
+        const double overlap = terms.empty()
+                                   ? 1.0
+                                   : static_cast<double>(matched) / static_cast<double>(terms.size());
+        // Generic action words ("hazırlanır") are already excluded from the
+        // key terms, so a sufficient overlap is real evidence. Requiring ALL
+        // terms dropped valid contexts (e.g. "qarın şişməsi" where a chunk
+        // says "şişkinlik"), so the share is used instead.
+        const bool lex_ok = !terms.empty() && matched >= 1 &&
+                            overlap >= cfg_.relevance_min_overlap;
+        const bool score_ok = matched >= 1 &&
+                              pdf_result.max_score >= cfg_.relevance_check_score;
+        bool keep = true;
+        std::string branch = "lexical";
+        if (!lex_ok && !score_ok) {
+            branch = "llm";
+            std::string snippets;
+            for (size_t i = 0; i < probe; ++i) {
+                snippets += "\n[" + std::to_string(i + 1) + "] ";
+                snippets += utf8_prefix(pdf_chunks[i].text, 500);
+            }
+            std::string rerr;
+            ChatTiming rtiming;
+            StageTimer t_rel;
+            const std::string verdict = ollama_.chat(
+                helper_model_,
+                {{"user", build_relevance_check_user_message(q, snippets)}},
+                cfg_.chat_options(6, 0.0), &rerr, &rtiming);
+            log_model_call("relevance_check", helper_model_,
+                           static_cast<long long>(t_rel.ms()), rtiming.load_ms,
+                           rtiming.prompt_eval_ms, rtiming.eval_ms,
+                           rtiming.prompt_tokens, rtiming.eval_tokens);
+            const std::string v = trim(az_fold(verdict));
+            const bool yes = v.rfind("beli", 0) == 0 || v.rfind("yes", 0) == 0;
+            const bool no = v.rfind("xeyr", 0) == 0 || v.rfind("yox", 0) == 0 ||
+                            v.rfind("no", 0) == 0;
+            if (yes) branch += "_yes";
+            else if (no) branch += "_no";
+            else branch += "_unknown";
+            keep = !(no && !yes);  // failed/unparsable check -> keep sources
+        }
+        log_info("relevance gate: branch=" + branch +
+                 " score=" + std::to_string(pdf_result.max_score) +
+                 " overlap=" + std::to_string(matched) + "/" +
+                 std::to_string(terms.size()) + " key_terms=[" + join(terms, ",") +
+                 "] missing=[" + missing + "] decision=" + (keep ? "keep" : "drop"));
+        if (!keep) {
+            pdf_chunks.clear();
+            pdf_relevance_failed = true;
+        }
     }
     WebOut web_out;
     if (web_enabled) web_out = web_fut.get();
@@ -896,6 +976,14 @@ AnswerResult RagPipeline::answer(const std::string& question,
     } else {
         user_msg = build_context_block(context_chunks) + "\n\n" +
                    build_draft_user_message(q);
+    }
+    if (pdf_relevance_failed) {
+        user_msg = "KONTEKST: Yüklənmiş PDF sənədlərində bu sual üzrə məlumat YOXDUR. "
+                   "Sual aqronomiya/maldarlıq mövzusundan kənar ola bilər - bu halda imtina "
+                   "ETMƏ, ümumi biliklərinlə qısa, dəqiq və faydalı cavab ver. Heç bir "
+                   "[Mənbə: ...] etiketi yazma, yalnız [Ümumi bilik] istifadə et. Suala "
+                   "birbaşa cavab ver - \"Məlumat vermək istəyirsiniz?\" və ya oxşar əlavə "
+                   "sual YAZMA.\n\nSUAL: " + q;
     }
     messages.push_back({"user", user_msg});
 
@@ -1070,7 +1158,7 @@ AnswerResult RagPipeline::answer(const std::string& question,
     if (selected.empty()) {
         res.from_own_knowledge = true;
         out += "\n\n";
-        out += NO_CONTEXT_NOTE;
+        out += pdf_relevance_failed ? NO_RELEVANT_CONTEXT_NOTE : NO_CONTEXT_NOTE;
     }
     // The web-failure note goes before the safety line so the safety line is
     // always the very last thing in the answer.

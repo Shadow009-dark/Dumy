@@ -152,6 +152,112 @@ inline std::string sanitize_utf8(const std::string& s) {
     return out;
 }
 
+// Decodes one UTF-8 codepoint at `i` and advances it (invalid byte -> U+FFFD).
+inline unsigned int utf8_next(const std::string& s, size_t& i) {
+    const unsigned char c = static_cast<unsigned char>(s[i]);
+    if (c < 0x80) { ++i; return c; }
+    size_t len = 0;
+    if ((c & 0xE0) == 0xC0) len = 2;
+    else if ((c & 0xF0) == 0xE0) len = 3;
+    else if ((c & 0xF8) == 0xF0) len = 4;
+    if (len == 0 || i + len > s.size()) { ++i; return 0xFFFD; }
+    unsigned int cp = c & (0x7F >> len);
+    for (size_t k = 1; k < len; ++k) {
+        const unsigned char cc = static_cast<unsigned char>(s[i + k]);
+        if ((cc & 0xC0) != 0x80) { ++i; return 0xFFFD; }
+        cp = (cp << 6) | (cc & 0x3F);
+    }
+    i += len;
+    return cp;
+}
+
+// Lowercases and folds Azerbaijani letters to ASCII (ə->e, ı->i, ş->s, ç->c,
+// ğ->g, ö->o, ü->u) so question words can be compared with document text.
+// Anything that is not a letter or digit becomes a single space.
+inline std::string az_fold(const std::string& in) {
+    std::string out;
+    out.reserve(in.size());
+    size_t i = 0;
+    bool pending_space = false;
+    while (i < in.size()) {
+        const unsigned int cp = utf8_next(in, i);
+        char a = 0;
+        if (cp < 0x80) {
+            if (std::isalnum(static_cast<int>(cp)))
+                a = static_cast<char>(std::tolower(static_cast<int>(cp)));
+        } else {
+            switch (cp) {
+                case 0x0259: case 0x018F: a = 'e'; break;  // ə / Ə
+                case 0x0131: case 0x0130: a = 'i'; break;  // ı / İ
+                case 0x015F: case 0x015E: a = 's'; break;  // ş / Ş
+                case 0x00E7: case 0x00C7: a = 'c'; break;  // ç / Ç
+                case 0x011F: case 0x011E: a = 'g'; break;  // ğ / Ğ
+                case 0x00F6: case 0x00D6: a = 'o'; break;  // ö / Ö
+                case 0x00FC: case 0x00DC: a = 'u'; break;  // ü / Ü
+                default: break;
+            }
+        }
+        if (a) {
+            if (pending_space && !out.empty()) out.push_back(' ');
+            pending_space = false;
+            out.push_back(a);
+        } else {
+            pending_space = true;
+        }
+    }
+    return out;
+}
+
+inline std::vector<std::string> az_words(const std::string& in) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (char c : az_fold(in)) {
+        if (c == ' ') {
+            if (cur.size() >= 2) out.push_back(cur);
+            cur.clear();
+        } else {
+            cur.push_back(c);
+        }
+    }
+    if (cur.size() >= 2) out.push_back(cur);
+    return out;
+}
+
+// Azerbaijani inflectional endings (folded). Used to tell "qoyunların" (a
+// suffixed form of "qoyun") from "şəkərçörək" (a compound whose first part
+// "şəkər" must NEVER be used as the standalone search term).
+inline bool az_is_inflection(const std::string& rest) {
+    static const char* SUF[] = {
+        "lar", "ler", "lari", "leri", "larin", "lerin", "lara", "lere",
+        "lardan", "lerden", "in", "un", "nin", "nun", "da", "de", "dan",
+        "den", "a", "e", "i", "u", "ya", "ye", "yi", "si", "su", "li",
+        "lu", "ci", "cu", "lik", "luq", "dir", "di", "du", "ki", "ku",
+        "ca", "ce", "cik", "cuq", "cuk", "la", "le", "mi", "mu"
+    };
+    for (const char* s : SUF)
+        if (rest.rfind(s, 0) == 0) return true;
+    return false;
+}
+
+// True when two folded words refer to the same stem. A prefix match counts
+// only when the leftover is an inflectional ending, so "qoyun" matches
+// "qoyunlarda" but "şəkər" does NOT match "şəkərçörək".
+inline bool az_words_match(const std::string& a, const std::string& b) {
+    if (a == b) return true;
+    const std::string& shorter = a.size() <= b.size() ? a : b;
+    const std::string& longer = a.size() <= b.size() ? b : a;
+    if (shorter.size() < 4 || longer.rfind(shorter, 0) != 0) return false;
+    return az_is_inflection(longer.substr(shorter.size()));
+}
+
+// First `max_bytes` bytes of valid UTF-8 (never splits a codepoint).
+inline std::string utf8_prefix(const std::string& s, size_t max_bytes) {
+    if (s.size() <= max_bytes) return s;
+    size_t end = max_bytes;
+    while (end > 0 && (static_cast<unsigned char>(s[end]) & 0xC0) == 0x80) --end;
+    return s.substr(0, end);
+}
+
 // ---------------------------------------------------------------------------
 // Hashing (FNV-1a 64 - fast content hash for files and cache keys)
 // ---------------------------------------------------------------------------
