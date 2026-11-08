@@ -395,27 +395,9 @@ bool RagPipeline::warmup(std::string* err) {
     warmup_.attempted = true;
     bool ok = true;
 
-    // --- bge-m3: tiny embed call, num_gpu=0 (CPU), keep_alive -1 -----------
-    {
-        std::vector<std::vector<float>> out;
-        std::string eerr;
-        ChatTiming et;
-        StageTimer t;
-        const bool eok = ollama_.embed(embedding_model_, {"salam"}, out, &eerr, &et);
-        warmup_.embed_ready = eok && !out.empty();
-        warmup_.embed_load_ms = et.load_ms;
-        log_model_call("warmup.embed", embedding_model_,
-                       static_cast<long long>(t.ms()), et.load_ms,
-                       et.prompt_eval_ms, et.eval_ms, et.prompt_tokens,
-                       et.eval_tokens);
-        if (!warmup_.embed_ready) {
-            warmup_.note = "embed warm-up failed: " + eerr;
-            log_warn(warmup_.note);
-            ok = false;
-        }
-    }
-
-    // --- main model: 1 token, identical options to the draft request --------
+    // --- main model FIRST: 1 token, identical options to the draft request --
+    // Order matters: loading the 7B evicts a model loaded earlier on this
+    // 6 GB GPU, so the CPU-only embedding model is warmed after it.
     {
         std::string cerr;
         ChatTiming ct;
@@ -435,6 +417,26 @@ bool RagPipeline::warmup(std::string* err) {
         }
     }
 
+    // --- bge-m3 second: tiny embed call, num_gpu=0 (CPU), keep_alive -1 -----
+    {
+        std::vector<std::vector<float>> out;
+        std::string eerr;
+        ChatTiming et;
+        StageTimer t;
+        const bool eok = ollama_.embed(embedding_model_, {"salam"}, out, &eerr, &et);
+        warmup_.embed_ready = eok && !out.empty();
+        warmup_.embed_load_ms = et.load_ms;
+        log_model_call("warmup.embed", embedding_model_,
+                       static_cast<long long>(t.ms()), et.load_ms,
+                       et.prompt_eval_ms, et.eval_ms, et.prompt_tokens,
+                       et.eval_tokens);
+        if (!warmup_.embed_ready) {
+            warmup_.note = "embed warm-up failed: " + eerr;
+            log_warn(warmup_.note);
+            ok = false;
+        }
+    }
+
     // --- verify both are still resident (and bge-m3 is on CPU) -------------
     {
         std::string perr;
@@ -442,9 +444,11 @@ bool RagPipeline::warmup(std::string* err) {
         auto same_model = [](const std::string& a, const std::string& b) {
             return a == b || strip_latest(a) == strip_latest(b);
         };
+        bool embed_resident = false;
         for (const auto& m : running) {
             if (same_model(m.name, chat_model_)) warmup_.main_resident = true;
             if (same_model(m.name, embedding_model_)) {
+                embed_resident = true;
                 warmup_.embed_on_cpu = (m.size_vram == 0);
             }
         }
@@ -456,7 +460,10 @@ bool RagPipeline::warmup(std::string* err) {
                 log_warn("WARN: '" + chat_model_ +
                          "' yüklənməyib / yaddaşdan çıxarılıb (yenidən yüklənəcək)");
             }
-            if (!warmup_.embed_on_cpu) {
+            if (!embed_resident) {
+                log_warn("WARN: embedding modeli '" + embedding_model_ +
+                         "' warm-up-dan sonra yüklü deyil (ilk sorğuda yenidən yüklənəcək)");
+            } else if (!warmup_.embed_on_cpu) {
                 log_warn("WARN: embedding modeli '" + embedding_model_ +
                          "' GPU-da görünür - num_gpu=0 tətbiq olunmayıb");
             }
@@ -1019,6 +1026,17 @@ AnswerResult RagPipeline::answer(const std::string& question,
     // very end, only when the question concerns health/diagnosis/treatment).
     final_answer =
         strip_silent_check(strip_safety_line(strip_own_sources(final_answer)));
+    // Step 7: never return an empty answer. If the post-processing passes ate
+    // everything (e.g. the model only wrote a clarification offer), fall back
+    // to the raw draft, then to a short actionable message.
+    if (trim(final_answer).empty()) {
+        const std::string raw = trim(draft);
+        final_answer = raw.empty()
+                           ? std::string("Bu sual üzrə cavab hazırlaya bilmədim. "
+                                         "Zəhmət olmasa sualı bir az dəqiqləşdirin.")
+                           : raw;
+        log_warn("post-processing emptied the answer - using the raw draft");
+    }
     res.used_chunks = cited_chunks(final_answer, selected);
 
     std::string out = final_answer;

@@ -715,12 +715,13 @@ inline std::string strip_clarification_offer(const std::string& in) {
     for (;;) {
         const size_t p = ci_find(out, "məlumat vermək istəyir");
         if (p == std::string::npos) break;
-        size_t ls = out.rfind('\n', p);
-        ls = (ls == std::string::npos) ? 0 : ls + 1;
-        size_t le = out.find('\n', p);
-        if (le == std::string::npos) le = out.size();
-        else ++le;  // include the newline
-        out.erase(ls, le - ls);
+        // Remove only the offer sentence (up to its "?"), not the whole line:
+        // the definition that shares the line must survive.
+        size_t end = out.find('?', p);
+        end = (end == std::string::npos) ? out.size() : end + 1;
+        size_t start = p;
+        while (start > 0 && (out[start - 1] == ' ' || out[start - 1] == '\t')) --start;
+        out.erase(start, end - start);
     }
     return trim(out);
 }
