@@ -962,6 +962,91 @@ inline std::string extract_arithmetic_expression(const std::string& question) {
     return question.substr(first, last - first);
 }
 
+inline size_t count_arith_numbers(const std::string& s) {
+    size_t n = 0;
+    bool in_num = false;
+    for (size_t i = 0; i < s.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        if (std::isdigit(c)) {
+            if (!in_num) { ++n; in_num = true; }
+        } else if (c != '.' && c != ',') {
+            in_num = false;
+        }
+    }
+    return n;
+}
+
+// Azerbaijani operation words (folded: vurulsun->vurulsun, böl->bol,
+// çıx->cix, əlavə->elave). Also true for + - * / × ÷.
+inline bool has_arithmetic_operator(const std::string& question) {
+    const std::string q = to_lower_utf8(question);
+    if (q.find('+') != std::string::npos || q.find('*') != std::string::npos ||
+        q.find('/') != std::string::npos || q.find("\xC3\x97") != std::string::npos ||
+        q.find("\xC3\xB7") != std::string::npos)
+        return true;
+    const std::string f = az_fold(question);
+    static const char* words[] = {
+        "vur",      // vur, vurulsun, vurmaq, vurun, vurmaqla
+        "bol",      // böl, bölünsün, bölmək, bölünür
+        "topla",    // topla, toplansın
+        "elave et", // əlavə et
+        "cix",      // çıx, çıxılsın, çıxmaq, çıxdı
+        "hasil",    // hasil, hasili
+        "defe"      // dəfə
+    };
+    for (const char* w : words)
+        if (f.find(w) != std::string::npos) return true;
+    return false;
+}
+
+// Builds a plain expression from an Azerbaijani phrase: "15 vurulsun 12",
+// "15-i 12-yə vur", "7 ilə 8-i topla", "20-dən 5 çıx". Operand suffixes are
+// ignored because only the numbers and the one operation matter. Returns ""
+// when the phrase is not a two-operand operation.
+inline std::string az_arithmetic_expression(const std::string& question) {
+    const std::string q = to_lower_utf8(question);
+    const bool symbol_form =
+        q.find('+') != std::string::npos || q.find('*') != std::string::npos ||
+        q.find('/') != std::string::npos || q.find("\xC3\x97") != std::string::npos ||
+        q.find("\xC3\xB7") != std::string::npos;
+    if (symbol_form) return extract_arithmetic_expression(question);
+
+    const std::string f = az_fold(question);
+    char op = 0;
+    if (f.find("vur") != std::string::npos) op = '*';
+    else if (f.find("bol") != std::string::npos) op = '/';
+    else if (f.find("topla") != std::string::npos || f.find("elave et") != std::string::npos)
+        op = '+';
+    else if (f.find("cix") != std::string::npos) op = '-';
+    else if (f.find("hasil") != std::string::npos || f.find("defe") != std::string::npos)
+        op = '*';
+    if (op == 0) return "";
+
+    std::vector<std::string> nums;
+    for (size_t i = 0; i < question.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(question[i]);
+        if (!std::isdigit(c)) continue;
+        if (i > 0 && (std::isdigit(static_cast<unsigned char>(question[i - 1])) ||
+                      question[i - 1] == '.' || question[i - 1] == ','))
+            continue;  // inside a number already collected
+        std::string num;
+        for (size_t j = i; j < question.size(); ++j) {
+            const unsigned char d = static_cast<unsigned char>(question[j]);
+            if (std::isdigit(d)) { num.push_back(question[j]); continue; }
+            if ((question[j] == '.' || question[j] == ',') && j + 1 < question.size() &&
+                std::isdigit(static_cast<unsigned char>(question[j + 1]))) {
+                num.push_back('.');
+                continue;
+            }
+            break;
+        }
+        nums.push_back(num);
+        if (nums.size() > 2) return "";
+    }
+    if (nums.size() != 2) return "";
+    return nums[0] + op + nums[1];
+}
+
 // True only for an actual expression (digit + operator) or an explicit
 // "neçə edir / hesabla" phrasing. "5 kq yem" is NOT arithmetic.
 inline bool is_arithmetic_question(const std::string& question) {
@@ -983,6 +1068,21 @@ inline bool is_arithmetic_question(const std::string& question) {
         }
     }
     if (op && meaningful_word_count(question) <= 10) return true;
+    // Word form: "15 vurulsun 12", "20-dən 5 çıx" - operator word + 2 numbers.
+    // A measure/dose question ("gündə 2 dəfə 5 kq yem") is NOT a computation,
+    // so units reject the word-operator branch.
+    if (count_arith_numbers(question) >= 1 && has_arithmetic_operator(question) &&
+        meaningful_word_count(question) <= 10) {
+        static const char* units[] = {"kq", "kg", "qram", "litr", "ml", "ton",
+                                      "hektar", "gun", "gunde", "doza", "faiz",
+                                      "bas", "metr", "santimetr", "ay", "il",
+                                      "kq/gun", "kq/gunde"};
+        for (const auto& w : az_words(question))
+            for (const char* u : units)
+                if (w == u) return false;
+        log_info("is_arithmetic_question: matched Azerbaijani operation word");
+        return true;
+    }
 
     static const char* kw[] = {"neçə edir", "nece edir", "neçə olacaq",
                                "nece olacaq", "neçədir", "necedir", "hesabla",
@@ -1013,6 +1113,10 @@ inline std::string strip_clarification_offer(const std::string& in) {
     }
     return trim(out);
 }
+
+inline const char* ARITHMETIC_REPHRASE_MESSAGE =
+    "Bu riyazi ifadəni başa düşmədim. Zəhmət olmasa rəqəmləri və əməliyyatı "
+    "aydın yazın, məsələn: \"15 × 12\", \"15 vur 12\" və ya \"20 - 5\".";
 
 inline const char* HONEST_FAILURE_MESSAGE =
     "Bu sual üzrə cavab yarada bilmədim. Zəhmət olmasa sualı fərqli sözlərlə "

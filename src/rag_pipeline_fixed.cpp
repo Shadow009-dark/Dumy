@@ -681,12 +681,27 @@ AnswerResult RagPipeline::answer(const std::string& question,
     const bool arithmetic_q = is_arithmetic_question(q);
     if (arithmetic_q) {
         double value = 0.0;
-        if (eval_simple_arithmetic(extract_arithmetic_expression(q), value)) {
-            log_info("fastpath: arithmetic question");
+        // Azerbaijani word form ("15 vurulsun 12", "20-dən 5 çıx") is turned
+        // into a plain expression first; symbol forms come back unchanged.
+        const std::string arith_expr = az_arithmetic_expression(q);
+        if (!arith_expr.empty() && eval_simple_arithmetic(arith_expr, value)) {
+            log_info("fastpath: arithmetic question [" + arith_expr + "] = " +
+                     format_arithmetic_result(value));
             res.qtype = "arithmetic";
             res.smalltalk = true;
             res.no_sources = true;
             res.answer = "Nəticə: " + format_arithmetic_result(value) + ".";
+            if (on_delta) on_delta(res.answer);
+            return res;
+        }
+        // A bare operation we cannot parse must never be guessed by the
+        // model: ask for a clearer expression instead.
+        if (!arith_expr.empty() || has_arithmetic_operator(q)) {
+            log_info("arithmetic: operation could not be parsed - asking to rephrase");
+            res.qtype = "arithmetic";
+            res.smalltalk = true;
+            res.no_sources = true;
+            res.answer = ARITHMETIC_REPHRASE_MESSAGE;
             if (on_delta) on_delta(res.answer);
             return res;
         }
