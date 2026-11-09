@@ -692,6 +692,120 @@ inline bool is_datetime_question(const std::string& question) {
 }
 
 // ---------------------------------------------------------------------------
+// Language tasks: rewrite / correct / translate / define / invent a sentence.
+// Answered directly by the model - no retrieval, no PDF context, no notes.
+// ---------------------------------------------------------------------------
+inline bool is_letters_task(const std::string& folded) {
+    return folded.find("herflerinin hamisi") != std::string::npos ||
+           folded.find("herflerin hamisi") != std::string::npos ||
+           (folded.find("herf") != std::string::npos &&
+            folded.find("hamisi") != std::string::npos);
+}
+
+inline bool is_language_task_question(const std::string& question) {
+    if (meaningful_word_count(question) > 24) return false;
+    const std::string f = az_fold(question);
+    if (is_letters_task(f)) return true;
+    static const char* kw[] = {
+        "cumleni duzelt", "cumleyi duzelt", "cumleni duzgun", "duzgun azerbaycan",
+        "cumleni yaz", "cumle yaz", "cumle qur", "cumle duzelt",
+        "misal cumle", "sozu duzelt", "sozun duzelt", "sehvi duzelt",
+        "metni duzelt", "metni duzgunlesdir", "duzgun yaz",
+        "tercume et", "tercume ele", "tercume ele", "tercume et", "translate",
+        "sozunun menasi", "sozun menasi", "kelimesinin menasi", "ne demekdir",
+        "correct the", "fix the sentence", "rewrite"
+    };
+    for (const char* k : kw) {
+        if (f.find(k) != std::string::npos) {
+            log_info("is_language_task: matched '" + std::string(k) + "'");
+            return true;
+        }
+    }
+    return false;
+}
+
+inline std::string build_language_task_prompt(const std::string& question) {
+    const std::string f = az_fold(question);
+    if (is_letters_task(f)) {
+        return "Tərkibində ə, ö, ü, ı, ç, ş, ğ hərflərinin HAMISI olan bir mənalı "
+               "Azərbaycan cümləsi yaz. Yalnız həmin cümləni yaz: izah, giriş sözü, "
+               "dırnaq və siyahı YOX.\n\nTAPŞIRIQ: " + question;
+    }
+    if (f.find("tercume") != std::string::npos || f.find("translate") != std::string::npos) {
+        return "Aşağıdakı tapşırıqdakı mətni Azərbaycan dilinə tərcümə et. Yalnız "
+               "tərcüməni yaz: izah, qeyd və mənbə etiketi YOX.\n\nTAPŞIRIQ: " + question;
+    }
+    if (f.find("ne demekdir") != std::string::npos ||
+        f.find("menasi") != std::string::npos) {
+        return "Aşağıdakı sözün mənasını bir qısa cümlə ilə Azərbaycan dilində izah "
+               "et. Yalnız cavabı yaz: giriş sözü, əlavə sual və mənbə etiketi YOX.\n\n"
+               "TAPŞIRIQ: " + question;
+    }
+    return "Aşağıdakı tapşırığı yerinə yetir və düzgün Azərbaycan dilində yalnız "
+           "nəticəni yaz: izah, giriş sözü, dırnaq, mənbə etiketi və əlavə sual YOX.\n\n"
+           "TAPŞIRIQ: " + question;
+}
+
+// One visible line, no labels/quotes, no "Düzəldilmiş cümlə:" prefix.
+inline std::string clean_language_task_output(const std::string& raw) {
+    std::string s = trim(raw);
+    if (s.empty()) return s;
+    // Drop a leading label on the first line ("Cavab: ...", "Nəticə: ...").
+    static const char* LABELS[] = {"cavab", "duzeldilmis cumle", "duzgun cumle",
+                                   "netice", "tercume", "izah", "answer"};
+    const std::string first_line = s.substr(0, s.find('\n'));
+    const size_t colon = first_line.find(':');
+    if (colon != std::string::npos && colon <= 40) {
+        const std::string head = az_fold(first_line.substr(0, colon));
+        for (const char* l : LABELS) {
+            if (head.find(l) != std::string::npos) {
+                s = trim(first_line.substr(colon + 1));
+                break;
+            }
+        }
+    }
+    // First non-empty line only: the sentence itself, not the explanation.
+    size_t begin = 0;
+    while (begin < s.size() && (s[begin] == '\n' || s[begin] == '\r' || s[begin] == ' '))
+        ++begin;
+    size_t end = s.find('\n', begin);
+    s = trim(s.substr(begin, end == std::string::npos ? std::string::npos : end - begin));
+    // Strip wrapping quotes (ASCII, curly and guillemets).
+    auto strip_quotes = [](std::string& t) {
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            static const char* open[] = {"\"", "'", "\xE2\x80\x9C", "\xC2\xAB"};
+            static const char* close[] = {"\"", "'", "\xE2\x80\x9D", "\xC2\xBB"};
+            for (size_t i = 0; i < 4; ++i) {
+                const std::string o(open[i]), c(close[i]);
+                if (t.size() >= o.size() && t.compare(0, o.size(), o) == 0) {
+                    t.erase(0, o.size());
+                    changed = true;
+                }
+                if (t.size() >= c.size() && t.compare(t.size() - c.size(), c.size(), c) == 0) {
+                    t.erase(t.size() - c.size());
+                    changed = true;
+                }
+            }
+            t = trim(t);
+        }
+    };
+    strip_quotes(s);
+    return trim(s);
+}
+
+// Azerbaijan letters the letters-task sentence must contain.
+inline std::string missing_az_letters(const std::string& text) {
+    static const char* LETTERS[] = {"\xC9\x99", "\xC3\xB6", "\xC3\xBC",
+                                    "\xC4\xB1", "\xC3\xA7", "\xC5\x9F", "\xC4\x9F"};
+    std::string out;
+    for (const char* l : LETTERS)
+        if (text.find(l) == std::string::npos) out += l;
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // Arithmetic (Step 7): answered directly, without PDF context.
 // A tiny recursive-descent evaluator - no eval, no model call, no context.
 // ---------------------------------------------------------------------------

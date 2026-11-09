@@ -722,6 +722,68 @@ AnswerResult RagPipeline::answer(const std::string& question,
         return res;
     }
 
+    // --- 1b. Language tasks: no retrieval, no context, no notes ------------
+    // Rewrite/correct/translate/define/invent-a-sentence requests are text
+    // tasks, not knowledge questions: answer directly with only the result.
+    if (is_language_task_question(q)) {
+        log_info("fastpath: language task (no retrieval, no PDF context)");
+        res.qtype = "language_task";
+        res.no_sources = true;
+        res.from_own_knowledge = true;
+        const bool letters = is_letters_task(az_fold(q));
+        const std::string prompt = build_language_task_prompt(q);
+        ChatOptions task_opts =
+            cfg_.chat_options(std::min(cfg_.num_predict_draft, 300), 0.0);
+        std::string terr;
+        ChatTiming ttiming;
+        StageTimer t_task;
+        std::string raw =
+            on_delta ? ollama_.chat_stream(chat_model_, {{"user", prompt}}, task_opts,
+                                           on_delta, &terr, &ttiming)
+                     : ollama_.chat(chat_model_, {{"user", prompt}}, task_opts, &terr,
+                                    &ttiming);
+        log_model_call("language_task", chat_model_,
+                       static_cast<long long>(t_task.ms()), ttiming.load_ms,
+                       ttiming.prompt_eval_ms, ttiming.eval_ms, ttiming.prompt_tokens,
+                       ttiming.eval_tokens);
+        std::string out = clean_language_task_output(raw);
+        int attempts = 1;
+        if (letters && !out.empty()) {
+            const std::string missing = missing_az_letters(out);
+            if (!missing.empty()) {
+                log_warn("language task: sentence misses letters - retrying once");
+                std::string rerr;
+                ChatTiming rtiming;
+                StageTimer t_retry;
+                const std::string retry_prompt =
+                    prompt + "\n\nDiqqət: əvvəlki cümlədə bu hərflər yox idi: " +
+                    missing + ". İndi hamısı olan YENİ bir cümlə yaz.";
+                const std::string raw2 = ollama_.chat(
+                    chat_model_, {{"user", retry_prompt}}, task_opts, &rerr, &rtiming);
+                log_model_call("language_task_retry", chat_model_,
+                               static_cast<long long>(t_retry.ms()), rtiming.load_ms,
+                               rtiming.prompt_eval_ms, rtiming.eval_ms,
+                               rtiming.prompt_tokens, rtiming.eval_tokens);
+                ++attempts;
+                const std::string out2 = clean_language_task_output(raw2);
+                if (!out2.empty() &&
+                    missing_az_letters(out2).size() < missing.size())
+                    out = out2;
+            }
+        }
+        if (out.empty()) {
+            out = HONEST_FAILURE_MESSAGE;
+            log_warn("language task: no usable output");
+        } else if (!letters && az_fold(q).find("cumle") != std::string::npos &&
+                   out.back() != '.' && out.back() != '!' && out.back() != '?') {
+            out += '.';
+        }
+        log_info("language task: attempts=" + std::to_string(attempts) +
+                 " chars=" + std::to_string(out.size()));
+        res.answer = out;
+        return res;
+    }
+
     // --- 2. routing (question-type analysis) --------------------------------
     StageTimer t_route;
     const QuestionType qtype = retriever_.analyze(q);
