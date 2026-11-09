@@ -1172,7 +1172,8 @@ AnswerResult RagPipeline::answer(const std::string& question,
     if (selected.empty()) {
         res.from_own_knowledge = true;
         out += "\n\n";
-        out += pdf_relevance_failed ? NO_RELEVANT_CONTEXT_NOTE : NO_CONTEXT_NOTE;
+        out += pdf_relevance_failed ? std::string(NO_RELEVANT_CONTEXT_NOTE)
+                                    : no_context_note(web_enabled || res.used_web);
     }
     // The web-failure note goes before the safety line so the safety line is
     // always the very last thing in the answer.

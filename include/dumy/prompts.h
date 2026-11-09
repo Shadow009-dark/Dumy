@@ -324,10 +324,15 @@ inline const char* OLLAMA_DOWN_MESSAGE =
     "Zəhmət olmasa Ollama-nı işə salın (Windows-da 'ollama' proqramını açın) "
     "və sonra yenidən cəhd edin.";
 
-inline const char* NO_CONTEXT_NOTE =
-    "Qeyd: bu sual üzrə PDF mənbələrimdə və internet axtarışında kifayət qədər "
-    "məlumat tapılmadı, ona görə cavab modelin ümumi bilikləri əsasında verilib "
-    "[Ümumi bilik].";
+// "No context" note. The internet must only be mentioned when a web search
+// actually ran - with web_search_enabled=false the note is PDF-only.
+inline std::string no_context_note(bool web_used) {
+    std::string s = "Qeyd: bu sual üzrə ";
+    s += web_used ? "PDF mənbələrimdə və internet axtarışında" : "PDF mənbələrimdə";
+    s += " kifayət qədər məlumat tapılmadı, ona görə cavab modelin ümumi "
+         "bilikləri əsasında verilib [Ümumi bilik].";
+    return s;
+}
 
 // Used when retrieval found only topically-related but irrelevant PDF text:
 // the answer must say the uploaded documents do not cover the question.
