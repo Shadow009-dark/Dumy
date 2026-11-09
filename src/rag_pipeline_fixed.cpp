@@ -860,12 +860,24 @@ AnswerResult RagPipeline::answer(const std::string& question,
                  " - PDF context dropped");
         pdf_chunks.clear();
     }
+    bool pdf_relevance_failed = false;
+    // --- 3a2. General-knowledge question: PDFs are not sources --------------
+    // "Fotosintez nədir?" matched an animal-biochemistry chapter by word, but
+    // an agriculture book is not a source for a general-science definition.
+    // Without a livestock/agronomy term in the question, answer from general
+    // knowledge instead of citing the PDF.
+    if (is_general_knowledge_question(q) && !pdf_chunks.empty()) {
+        log_info("general-knowledge question: PDF context dropped (" +
+                 std::to_string(pdf_chunks.size()) +
+                 " chunks, no livestock/agronomy term)");
+        pdf_chunks.clear();
+        pdf_relevance_failed = true;
+    }
     // --- 3b. Relevance gate: off-topic PDF hits must not become citations ---
     // The cosine guard above cannot separate "şəkərçörək" from sugar-beet
     // text (bge-m3 scores topically-related agri text high). Require a key
     // noun of the question in a retained chunk, or ask the helper model a
     // cheap yes/no question when lexical support is missing.
-    bool pdf_relevance_failed = false;
     if (!pdf_chunks.empty() && cfg_.relevance_check_enabled) {
         const std::vector<std::string> terms = relevance_key_terms(q);
         const size_t probe = std::min<size_t>(pdf_chunks.size(), 6);
@@ -1042,13 +1054,18 @@ AnswerResult RagPipeline::answer(const std::string& question,
     messages.push_back({"system", SYSTEM_PROMPT});
     for (const auto& m : sessions_.history(session_id)) messages.push_back(m);
 
+    const int requested_sentences = requested_sentence_count(q);
+    const std::string sentence_rule =
+        requested_sentences > 0
+            ? " Cavabı düz " + std::to_string(requested_sentences) + " cümlə ilə ver."
+            : std::string();
     std::string user_msg;
     if (context_chunks.empty()) {
         user_msg =
             "KONTEKST: Bu sual üzrə PDF məlumatı tapılmadı.\n"
             "Cavabı öz biliklərinlə ver, əsaslandığın yerləri [Ümumi bilik] "
             "etiket ilə işarələ və mənbəsiz faktları mənbəli kimi təqdim etmə. "
-            "Suala birbaşa, tam cavab yaz.\n\nSUAL: " + q;
+            "Suala birbaşa, tam cavab yaz." + sentence_rule + "\n\nSUAL: " + q;
     } else {
         user_msg = build_context_block(context_chunks) + "\n\n" +
                    build_draft_user_message(q);
@@ -1058,7 +1075,7 @@ AnswerResult RagPipeline::answer(const std::string& question,
                    "Sual aqronomiya/maldarlıq mövzusundan kənar ola bilər - bu halda imtina "
                    "ETMƏ, ümumi biliklərinlə qısa, dəqiq və faydalı cavab ver. Heç bir "
                    "[Mənbə: ...] etiketi yazma, yalnız [Ümumi bilik] istifadə et. Suala "
-                   "birbaşa, tam cavab yaz.\n\nSUAL: " + q;
+                   "birbaşa, tam cavab yaz." + sentence_rule + "\n\nSUAL: " + q;
     }
     messages.push_back({"user", user_msg});
 
@@ -1258,6 +1275,14 @@ AnswerResult RagPipeline::answer(const std::string& question,
     if (trim(final_answer).empty()) {
         final_answer = HONEST_FAILURE_MESSAGE;
         log_warn("quality gate: answer still empty - honest failure message");
+    }
+    if (requested_sentences > 0) {
+        const std::string limited = limit_sentences(final_answer, requested_sentences);
+        if (limited != final_answer) {
+            log_info("answer limited to " + std::to_string(requested_sentences) +
+                     " sentence(s) as requested");
+            final_answer = limited;
+        }
     }
     res.used_chunks = cited_chunks(final_answer, selected);
 

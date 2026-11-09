@@ -86,6 +86,9 @@ inline std::string normalize_smalltalk(const std::string& in) {
 // Counts words that carry meaning (>= 3 letters, digits count too).
 inline size_t meaningful_word_count(const std::string& message);
 
+// "iki cümlə" / "bir cümlə" / "3 cümlə" -> sentence limit (0 = none).
+inline int requested_sentence_count(const std::string& question);
+
 // True for short, question-free greetings/thanks/bye words.
 inline bool is_smalltalk(const std::string& message) {
     static const char* PHRASES[] = {
@@ -411,7 +414,14 @@ inline std::string build_draft_user_message(const std::string& question) {
            "siyahı şəklində mənbələr) - mənbə siyahısını proqram özü əlavə edir. "
            "Yalnız yuxarıdakı mətn-daxi etiketləri işlət.\n\n"
            "QAYDA 4: Hesablama üçün sualdan götürülməyən dəyər (canlı çəki, günlük norma, faiz, doza) lazımdırsa, onu uydurma: ya istifadəçidən soruş, ya da hər dəyəri ayrıca \"Fərziyyə: ...\" sətri ilə göstər. Sualdan və kontekstdən götürülməyən rəqəmə [Mənbə: ...] etiketi QOYMA. Düsturu və vahidləri yaz (canlı çəki kq, norma % canlı çəki və ya kq/gün).\n"
-           "SUAL: " + question;
+           ;
+    {
+        const int requested = requested_sentence_count(question);
+        if (requested > 0)
+            s += "QAYDA 5: Cavabı düz " + std::to_string(requested) +
+                 " cümlə ilə ver - artıq cümlə yazma.\n";
+    }
+    s += "SUAL: " + question;
     return s;
 }
 
@@ -432,7 +442,10 @@ inline std::vector<std::string> relevance_key_terms(const std::string& question)
         "pisirilir", "pisirmek", "pishirilir", "pishirmek", "verilir", "vermek",
         "artirilir", "artirmaq", "azaltmaq", "istifade", "istifadesi", "etmek",
         "etmeli", "olmali", "what", "how", "why", "is", "are", "the", "a", "an", "much",
-        "many", "does", "do", "for", "of", "in", "on"
+        "many", "does", "do", "for", "of", "in", "on",
+        // task/format words: "iki cümlə ilə izah et" is not a topic
+        "cumle", "cumle ile", "cumleni", "izah", "yaz", "yazmaq", "misal",
+        "soz", "sozu", "sozun", "demekdir", "tercume"
     };
     std::vector<std::string> out;
     for (const auto& w : az_words(question)) {
@@ -1021,6 +1034,65 @@ inline bool is_clarification_only_answer(const std::string& answer) {
 inline bool is_degenerate_answer(const std::string& answer) {
     const std::string t = trim(strip_clarification_offer(answer));
     return t.empty() || is_clarification_only_answer(answer);
+}
+
+// A simple general-knowledge question (definition / explanation) with no
+// livestock or agronomy term. The PDFs are agriculture books, so for these a
+// matching word inside an animal-biochemistry chapter is not a real source.
+inline bool is_general_knowledge_question(const std::string& question) {
+    const std::string f = az_fold(question);
+    static const char* general[] = {
+        "nedir", "ne demekdir", "kimdir", "izah et", "nece isleyir",
+        "what is", "who is", "haradir", "ne vaxt", "ne zaman", "tarixi"
+    };
+    bool is_general = false;
+    for (const char* g : general)
+        if (f.find(g) != std::string::npos) { is_general = true; break; }
+    if (!is_general) return false;
+    static const char* domain[] = {
+        "heyvan", "heyvandar", "mal-qara", "malqara", "maldar", "inek", "ineyin",
+        "qoyun", "qoyunlar", "keci", "camis", "buzov", "quzu", "toyuq", "ari",
+        "yem", "yemleme", "yemlenme", "sud", "sut", "sagim", "sagmaq",
+        "taxil", "bitki", "torpaq", "gubre", "toxum", "ting", "bag", "uzum",
+        "pambiq", "bugda", "arpa", "qargidali", "kartof", "pomidor", "xiyar",
+        "agac", "meyve", "terevez", "aqronom", "baytar", "ferma", "otlaq",
+        "bicin", "damazliq", "seleksiya", "xestelik", "diaqnoz", "mualice",
+        "vaksin", "derman", "doza", "antibiot", "peyvend", "parazit"
+    };
+    for (const char* d : domain)
+        if (f.find(d) != std::string::npos) return false;
+    return true;
+}
+
+// Explicit "iki cümlə" / "bir cümlə" / "3 cümlə" request -> sentence limit.
+inline int requested_sentence_count(const std::string& question) {
+    const std::string f = az_fold(question);
+    if (f.find("bir cumle") != std::string::npos || f.find("1 cumle") != std::string::npos)
+        return 1;
+    if (f.find("iki cumle") != std::string::npos || f.find("2 cumle") != std::string::npos)
+        return 2;
+    if (f.find("uc cumle") != std::string::npos || f.find("3 cumle") != std::string::npos)
+        return 3;
+    return 0;
+}
+
+// Keeps at most `limit` sentences (terminator + following space/newline).
+inline std::string limit_sentences(const std::string& text, int limit) {
+    if (limit <= 0) return text;
+    int count = 0;
+    for (size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (c != '.' && c != '!' && c != '?') continue;
+        const size_t next = i + 1;
+        if (next < text.size() && text[next] != ' ' && text[next] != '\n' &&
+            text[next] != '\r')
+            continue;  // decimal point / abbreviation inside a token
+        if (++count == limit) {
+            std::string out = text.substr(0, next);
+            return trim(out);
+        }
+    }
+    return text;
 }
 
 // Off-topic / out-of-domain questions (not agronomy/livestock) -> polite refusal.
