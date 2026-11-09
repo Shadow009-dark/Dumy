@@ -401,8 +401,8 @@ inline std::string build_draft_user_message(const std::string& question) {
     }
     s +=
            "QAYDA 1: Əgər kontekstdə kifayət qədər məlumat varsa, suala BİRBAŞA "
-           "ətraflı cavab ver - sadəcə sualı geri atma. Yalnız sual həqiqətən "
-           "qeyri-müəyyəndirsə və ya təhlükəlidirsə BİR qısa aydınlaşdırıcı sual ver.\n"
+           "ətraflı cavab ver - sadəcə sualı geri atma və əlavə sual vermə. Sual "
+           "qeyri-müəyyəndirsə ən ehtimallı cavabı ver və fərziyyəni qısa qeyd et.\n"
            "QAYDA 2: Cavabda mənbə etiketlərini mətnin DAXİLİNDƏ, iddiadan dərhal "
            "sonra göstər: [Mənbə: fayl, səh. X], [İnternet: url], [Ümumi bilik]. "
            "[Xülasə: ...] etiketini heç vaxt yazma.\n"
@@ -865,8 +865,8 @@ inline bool is_arithmetic_question(const std::string& question) {
     return false;
 }
 
-// Step 7: never leave the assistant's "Məlumat vermək istəyirsiniz?" offer in
-// the answer - the user asked a question, so it gets an answer.
+// Step 7: never leave an assistant-style "would you like more information?"
+// offer in the answer - the user asked a question, so it gets an answer.
 inline std::string strip_clarification_offer(const std::string& in) {
     std::string out = in;
     for (;;) {
@@ -881,6 +881,32 @@ inline std::string strip_clarification_offer(const std::string& in) {
         out.erase(start, end - start);
     }
     return trim(out);
+}
+
+inline const char* HONEST_FAILURE_MESSAGE =
+    "Bu sual üzrə cavab yarada bilmədim. Zəhmət olmasa sualı fərqli sözlərlə "
+    "və ya daha dəqiq yazın.";
+
+// A single strict retry when the draft was empty / only a clarification offer
+// / too short to be a real answer. Minimal prompt: no context, no rules that
+// invite an offer.
+inline std::string build_strict_answer_message(const std::string& question) {
+    return "Sual: " + question + "\n\nYalnız bu sualın cavabını yaz. Giriş sözu, "
+           "təklif, əlavə sual, mənbə siyahısı və izah YAZMA. Cavabı tam, aydın "
+           "cümlələrlə Azərbaycan dilində ver.";
+}
+
+// True when stripping a clarification offer leaves nothing at all.
+inline bool is_clarification_only_answer(const std::string& answer) {
+    if (trim(answer).empty()) return true;
+    const std::string rest = trim(strip_clarification_offer(answer));
+    if (!rest.empty()) return false;
+    return ci_find(answer, "məlumat vermək istəyir") != std::string::npos;
+}
+
+inline bool is_degenerate_answer(const std::string& answer) {
+    const std::string t = trim(strip_clarification_offer(answer));
+    return t.empty() || is_clarification_only_answer(answer);
 }
 
 // Off-topic / out-of-domain questions (not agronomy/livestock) -> polite refusal.

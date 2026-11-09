@@ -983,10 +983,10 @@ AnswerResult RagPipeline::answer(const std::string& question,
     std::string user_msg;
     if (context_chunks.empty()) {
         user_msg =
-            "KONTEKST: Bu sual üzrə PDF və ya internet məlumatı tapılmadı.\n"
-            "Cavabı öz biliklərinlə ver və mütləq [Ümumi bilik] etiketini qeyd et, "
-            "mənbəsiz faktları mənbəli kimi təqdim etmə. Suala birbaşa cavab ver - "
-            "\"Məlumat vermək istəyirsiniz?\" və ya oxşar əlavə sual YAZMA.\n\nSUAL: " + q;
+            "KONTEKST: Bu sual üzrə PDF məlumatı tapılmadı.\n"
+            "Cavabı öz biliklərinlə ver, əsaslandığın yerləri [Ümumi bilik] "
+            "etiket ilə işarələ və mənbəsiz faktları mənbəli kimi təqdim etmə. "
+            "Suala birbaşa, tam cavab yaz.\n\nSUAL: " + q;
     } else {
         user_msg = build_context_block(context_chunks) + "\n\n" +
                    build_draft_user_message(q);
@@ -996,8 +996,7 @@ AnswerResult RagPipeline::answer(const std::string& question,
                    "Sual aqronomiya/maldarlıq mövzusundan kənar ola bilər - bu halda imtina "
                    "ETMƏ, ümumi biliklərinlə qısa, dəqiq və faydalı cavab ver. Heç bir "
                    "[Mənbə: ...] etiketi yazma, yalnız [Ümumi bilik] istifadə et. Suala "
-                   "birbaşa cavab ver - \"Məlumat vermək istəyirsiniz?\" və ya oxşar əlavə "
-                   "sual YAZMA.\n\nSUAL: " + q;
+                   "birbaşa, tam cavab yaz.\n\nSUAL: " + q;
     }
     messages.push_back({"user", user_msg});
 
@@ -1155,16 +1154,48 @@ AnswerResult RagPipeline::answer(const std::string& question,
     // very end, only when the question concerns health/diagnosis/treatment).
     final_answer =
         strip_silent_check(strip_safety_line(strip_own_sources(final_answer)));
-    // Step 7: never return an empty answer. If the post-processing passes ate
-    // everything (e.g. the model only wrote a clarification offer), fall back
-    // to the raw draft, then to a short actionable message.
+    // --- 7b. answer-quality gate ------------------------------------------
+    // Never return an empty answer or a bare clarification offer; retry once
+    // with a minimal strict prompt when the draft is degenerate or shorter
+    // than quality_check.min_answer_chars. The old fallback re-used the raw
+    // draft, which is how a phrase-only answer reached the user.
+    const bool degenerate = is_degenerate_answer(final_answer);
+    const bool too_short =
+        cfg_.quality_check_enabled && !degenerate &&
+        final_answer.size() <
+            static_cast<size_t>(std::max(0, cfg_.quality_min_answer_chars));
+    if (degenerate || too_short) {
+        log_warn(std::string("quality gate: ") +
+                 (degenerate ? "degenerate" : "short") + " answer (" +
+                 std::to_string(final_answer.size()) + " chars) - strict retry");
+        std::string serr;
+        ChatTiming stiming;
+        StageTimer t_strict;
+        std::string retry = ollama_.chat(
+            chat_model_, {{"user", build_strict_answer_message(q)}},
+            cfg_.chat_options(cfg_.num_predict_draft, 0.1), &serr, &stiming);
+        log_model_call("strict_retry", chat_model_,
+                       static_cast<long long>(t_strict.ms()), stiming.load_ms,
+                       stiming.prompt_eval_ms, stiming.eval_ms,
+                       stiming.prompt_tokens, stiming.eval_tokens);
+        retry = trim(strip_clarification_offer(
+            strip_silent_check(strip_safety_line(strip_own_sources(
+                OllamaClient::strip_thinking(retry))))));
+        if (!retry.empty() && !is_degenerate_answer(retry) &&
+            (degenerate || retry.size() > final_answer.size())) {
+            final_answer = retry;
+            log_info("quality gate: strict retry accepted (" +
+                     std::to_string(final_answer.size()) + " chars)");
+        } else if (degenerate) {
+            final_answer = HONEST_FAILURE_MESSAGE;
+            log_warn("quality gate: strict retry failed - honest failure message");
+        } else {
+            log_warn("quality gate: strict retry not better - keeping short draft");
+        }
+    }
     if (trim(final_answer).empty()) {
-        const std::string raw = trim(draft);
-        final_answer = raw.empty()
-                           ? std::string("Bu sual üzrə cavab hazırlaya bilmədim. "
-                                         "Zəhmət olmasa sualı bir az dəqiqləşdirin.")
-                           : raw;
-        log_warn("post-processing emptied the answer - using the raw draft");
+        final_answer = HONEST_FAILURE_MESSAGE;
+        log_warn("quality gate: answer still empty - honest failure message");
     }
     res.used_chunks = cited_chunks(final_answer, selected);
 
