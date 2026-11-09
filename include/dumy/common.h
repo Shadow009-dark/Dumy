@@ -356,7 +356,8 @@ inline void log_error(const std::string& msg) { log_line("ERROR", msg); }
 inline void log_model_call(const char* stage, const std::string& model,
                            long long wall_ms, long long load_ms,
                            long long prompt_eval_ms, long long gen_ms,
-                           long long prompt_tokens, long long eval_tokens) {
+                           long long prompt_tokens, long long eval_tokens,
+                           const std::string& done_reason = std::string()) {
     log_info(std::string("[timing] ") + stage + " model=" + model +
              " wall=" + std::to_string(wall_ms) + "ms" +
              " load=" + std::to_string(load_ms) + "ms" +
@@ -364,6 +365,7 @@ inline void log_model_call(const char* stage, const std::string& model,
              " gen=" + std::to_string(gen_ms) + "ms" +
              " tok=" + std::to_string(prompt_tokens) + "+" +
              std::to_string(eval_tokens) +
+             (done_reason.empty() ? "" : " done_reason=" + done_reason) +
              // Step 2: only a real load/swap (>500 ms) deserves the marker;
              // normal calls must stay quiet.
              (load_ms > 500 ? " [MODEL LOADED/SWAPPED]" : ""));

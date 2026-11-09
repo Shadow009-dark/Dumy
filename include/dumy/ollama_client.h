@@ -42,6 +42,9 @@ struct ChatTiming {
     long long total_ms = 0;        // whole Ollama-side call
     long long prompt_tokens = 0;
     long long eval_tokens = 0;
+    // Ollama's finish reason for the call: "stop" (natural end), "length"
+    // (hit num_predict), or empty when the server did not report it.
+    std::string done_reason;
     bool model_loaded() const { return load_ms > 0; }
 };
 

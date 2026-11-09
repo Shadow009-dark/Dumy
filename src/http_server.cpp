@@ -280,7 +280,9 @@ bool HttpServer::start(std::string* err) {
                     return true;
                 }
 
-                send({{"type", "done"},
+                log_info("stream: answer_chars=" + std::to_string(r.answer.size()) +
+                         " qtype=" + r.qtype + " warning=" + r.warning);
+                if (!send({{"type", "done"},
                       {"session_id", session_copy},
                       {"answer", r.answer},
                       {"sources", r.sources_json()},
@@ -291,7 +293,8 @@ bool HttpServer::start(std::string* err) {
                       {"own_knowledge", r.from_own_knowledge},
                       {"self_check_failed", r.self_check_failed},
                       {"self_check_retries", r.self_check_retries},
-                      {"warning", r.warning}});
+                      {"warning", r.warning}}))
+                    log_warn("stream: done event write failed (client disconnected)");
                 sink.done();
                 return true;
             });

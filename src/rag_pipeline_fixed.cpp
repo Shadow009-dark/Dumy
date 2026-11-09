@@ -114,6 +114,8 @@ std::string strip_latest(const std::string& model) {
     return model;
 }
 
+
+
 // Honesty guard: a [Mənbə: ...] / [İnternet: ...] label must point at a
 // source that was actually in the context. Models occasionally invent URLs
 // ("example.com/...") or cite files that were never provided - those labels
@@ -745,7 +747,7 @@ AnswerResult RagPipeline::answer(const std::string& question,
         log_model_call("language_task", chat_model_,
                        static_cast<long long>(t_task.ms()), ttiming.load_ms,
                        ttiming.prompt_eval_ms, ttiming.eval_ms, ttiming.prompt_tokens,
-                       ttiming.eval_tokens);
+                       ttiming.eval_tokens, ttiming.done_reason);
         std::string out = clean_language_task_output(raw);
         int attempts = 1;
         if (letters && !out.empty()) {
@@ -763,7 +765,8 @@ AnswerResult RagPipeline::answer(const std::string& question,
                 log_model_call("language_task_retry", chat_model_,
                                static_cast<long long>(t_retry.ms()), rtiming.load_ms,
                                rtiming.prompt_eval_ms, rtiming.eval_ms,
-                               rtiming.prompt_tokens, rtiming.eval_tokens);
+                               rtiming.prompt_tokens, rtiming.eval_tokens,
+                               rtiming.done_reason);
                 ++attempts;
                 const std::string out2 = clean_language_task_output(raw2);
                 if (!out2.empty() &&
@@ -1086,17 +1089,62 @@ AnswerResult RagPipeline::answer(const std::string& question,
     std::string derr;
     std::string draft;
     ChatTiming draft_timing;
-    if (on_delta) {
-        draft = ollama_.chat_stream(chat_model_, messages, draft_opts, on_delta, &derr,
-                                    &draft_timing);
-    } else {
-        draft = ollama_.chat(chat_model_, messages, draft_opts, &derr, &draft_timing);
-    }
-    const double ms_draft = t_draft.ms();
-    log_model_call("draft", chat_model_, static_cast<long long>(ms_draft),
+    auto run_draft = [&](const std::vector<ChatMessage>& msgs, const ChatOptions& opts,
+                         ChatTiming& tim) -> std::string {
+        return on_delta ? ollama_.chat_stream(chat_model_, msgs, opts, on_delta,
+                                              &derr, &tim)
+                        : ollama_.chat(chat_model_, msgs, opts, &derr, &tim);
+    };
+    draft = run_draft(messages, draft_opts, draft_timing);
+    log_model_call("draft", chat_model_, static_cast<long long>(t_draft.ms()),
                    draft_timing.load_ms, draft_timing.prompt_eval_ms,
                    draft_timing.eval_ms, draft_timing.prompt_tokens,
-                   draft_timing.eval_tokens);
+                   draft_timing.eval_tokens, draft_timing.done_reason);
+    // A draft that hit num_predict (done_reason=length) is regenerated once
+    // with the largest budget the remaining num_ctx allows. A continuation
+    // append duplicated the answer (the model restarted instead of resuming),
+    // so a clean second generation is used instead.
+    if (!draft.empty() && draft_timing.done_reason == "length") {
+        log_warn("draft hit num_predict (done_reason=length) - regenerating once");
+        ChatOptions retry_opts = draft_opts;
+        const long long room =
+            static_cast<long long>(cfg_.num_ctx) - draft_timing.prompt_tokens - 150;
+        retry_opts.num_predict = static_cast<int>(
+            std::max<long long>(300, std::min<long long>(850, room)));
+        StageTimer t_regen;
+        ChatTiming regen_timing;
+        // Not streamed: the first (truncated) attempt is already on screen and
+        // the UI replaces it with the final answer on the done event.
+        std::string again =
+            ollama_.chat(chat_model_, messages, retry_opts, &derr, &regen_timing);
+        log_model_call("draft_regen", chat_model_,
+                       static_cast<long long>(t_regen.ms()), regen_timing.load_ms,
+                       regen_timing.prompt_eval_ms, regen_timing.eval_ms,
+                       regen_timing.prompt_tokens, regen_timing.eval_tokens,
+                       regen_timing.done_reason);
+        log_info("draft_regen: budget=" + std::to_string(retry_opts.num_predict) +
+                 " done_reason=" +
+                 (regen_timing.done_reason.empty() ? std::string("?")
+                                                    : regen_timing.done_reason));
+        if (!again.empty()) {
+            draft = again;
+            draft_timing = regen_timing;
+        }
+    }
+    // Last resort: never leave a mid-word or unfinished [Mənbə label. Cutting
+    // back to the last complete sentence is better than a half citation.
+    if (!draft.empty() &&
+        (draft_timing.done_reason == "length" || has_dangling_source_label(draft))) {
+        const std::string trimmed =
+            trim_to_last_sentence(strip_dangling_source_label(draft));
+        if (!trimmed.empty() && trimmed.size() >= 40) {
+            log_warn("draft still truncated - cut back to the last complete sentence (" +
+                     std::to_string(draft.size()) + " -> " + std::to_string(trimmed.size()) +
+                     " chars)");
+            draft = trimmed;
+        }
+    }
+    const double ms_draft = t_draft.ms();
     // Test instrument (DUMY_DUMP_TOPK=1): prompt_eval_count of the draft call
     // next to the context knobs, so "prompt fits in num_ctx" is checkable.
     if (std::getenv("DUMY_DUMP_TOPK") != nullptr) {
@@ -1197,7 +1245,8 @@ AnswerResult RagPipeline::answer(const std::string& question,
             log_model_call("draft_retry", chat_model_,
                            static_cast<long long>(t_fix.ms()), fix_timing.load_ms,
                            fix_timing.prompt_eval_ms, fix_timing.eval_ms,
-                           fix_timing.prompt_tokens, fix_timing.eval_tokens);
+                           fix_timing.prompt_tokens, fix_timing.eval_tokens,
+                           fix_timing.done_reason);
             if (fixed.empty()) {
                 log_warn("self-check retry failed, keeping draft: " + ferr);
             } else {
@@ -1221,8 +1270,8 @@ AnswerResult RagPipeline::answer(const std::string& question,
     const double ms_check = t_check.ms();
     StageTimer t_post;
     final_answer = validate_source_labels(
-        strip_clarification_offer(fix_url_labels(
-            strip_summary_labels(OllamaClient::strip_thinking(final_answer)))),
+        strip_dangling_source_label(strip_clarification_offer(fix_url_labels(
+            strip_summary_labels(OllamaClient::strip_thinking(final_answer))))),
         selected);
 
     // --- 8. strip model-written source list, add notes + safety warning ----
@@ -1231,8 +1280,8 @@ AnswerResult RagPipeline::answer(const std::string& question,
     // Remove a model-written source list, any echoed silent-check block, and
     // every copy of the safety line (it is appended back exactly once, at the
     // very end, only when the question concerns health/diagnosis/treatment).
-    final_answer =
-        strip_silent_check(strip_safety_line(strip_own_sources(final_answer)));
+    final_answer = strip_trailing_source_lines(
+        strip_silent_check(strip_safety_line(strip_own_sources(final_answer))));
     // --- 7b. answer-quality gate ------------------------------------------
     // Never return an empty answer or a bare clarification offer; retry once
     // with a minimal strict prompt when the draft is degenerate or shorter
@@ -1256,10 +1305,10 @@ AnswerResult RagPipeline::answer(const std::string& question,
         log_model_call("strict_retry", chat_model_,
                        static_cast<long long>(t_strict.ms()), stiming.load_ms,
                        stiming.prompt_eval_ms, stiming.eval_ms,
-                       stiming.prompt_tokens, stiming.eval_tokens);
-        retry = trim(strip_clarification_offer(
+                       stiming.prompt_tokens, stiming.eval_tokens, stiming.done_reason);
+        retry = trim(strip_dangling_source_label(strip_clarification_offer(
             strip_silent_check(strip_safety_line(strip_own_sources(
-                OllamaClient::strip_thinking(retry))))));
+                OllamaClient::strip_thinking(retry)))))));
         if (!retry.empty() && !is_degenerate_answer(retry) &&
             (degenerate || retry.size() > final_answer.size())) {
             final_answer = retry;

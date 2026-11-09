@@ -421,6 +421,10 @@ inline std::string build_draft_user_message(const std::string& question) {
             s += "QAYDA 5: Cavabı düz " + std::to_string(requested) +
                  " cümlə ilə ver - artıq cümlə yazma.\n";
     }
+    // Keep the draft inside num_predict: an unfinished answer is worse than a
+    // concise one.
+    s += "QAYDA 6: Cavabı qısa saxla - adi sualda 120 sözdən çox yazma, "
+         "təkrar və ümumi giriş cümlələri vermə.\n";
     s += "SUAL: " + question;
     return s;
 }
@@ -1029,6 +1033,55 @@ inline bool is_clarification_only_answer(const std::string& answer) {
     const std::string rest = trim(strip_clarification_offer(answer));
     if (!rest.empty()) return false;
     return ci_find(answer, "məlumat vermək istəyir") != std::string::npos;
+}
+
+// True when the text ends inside a source label ("...[M", "...[Mənbə: fayl").
+inline bool has_dangling_source_label(const std::string& s) {
+    const size_t open = s.rfind('[');
+    if (open == std::string::npos) return false;
+    if (s.find(']', open) != std::string::npos) return false;
+    return s.size() - open <= 48;  // short unfinished label, not prose
+}
+
+// Drops trailing lines that are only a file name / numbered source list
+// ("1. Qoyunçuluq.pdf") that the model wrote despite being told not to.
+inline std::string strip_trailing_source_lines(std::string s) {
+    for (;;) {
+        const size_t end = s.find_last_not_of(" \t\r\n");
+        if (end == std::string::npos) return s;
+        const size_t nl = s.find_last_of('\n', end);
+        const size_t begin = (nl == std::string::npos) ? 0 : nl + 1;
+        std::string line = trim(s.substr(begin, end + 1 - begin));
+        const std::string folded = az_fold(line);
+        const bool pdf_line = ends_with(folded, ".pdf");
+        const bool prose = line.find('?') != std::string::npos ||
+                           line.find('!') != std::string::npos;
+        if (!pdf_line || prose || line.size() > 200)
+            return trim(s.substr(0, end + 1));
+        s.erase(begin);
+    }
+}
+
+// Cuts the text back to its last complete sentence (used only when a draft
+// still hit num_predict after the continuation attempts, so the user never
+// sees a mid-word / "[M" ending).
+inline std::string trim_to_last_sentence(const std::string& text) {
+    for (size_t i = text.size(); i > 0; --i) {
+        const char c = text[i - 1];
+        if (c != '.' && c != '!' && c != '?') continue;
+        if (i < text.size() && text[i] != ' ' && text[i] != '\n' && text[i] != '\r')
+            continue;  // decimal point inside a number
+        return trim(text.substr(0, i));
+    }
+    return text;
+}
+
+inline std::string strip_dangling_source_label(std::string s) {
+    while (has_dangling_source_label(s)) {
+        s.erase(s.rfind('['));
+        s = trim(s);
+    }
+    return s;
 }
 
 inline bool is_degenerate_answer(const std::string& answer) {

@@ -167,6 +167,8 @@ ChatTiming timing_from_json(const nlohmann::json& j) {
         t.prompt_tokens = j["prompt_eval_count"].get<long long>();
     if (j.contains("eval_count") && j["eval_count"].is_number())
         t.eval_tokens = j["eval_count"].get<long long>();
+    if (j.contains("done_reason") && j["done_reason"].is_string())
+        t.done_reason = j["done_reason"].get<std::string>();
     return t;
 }
 
