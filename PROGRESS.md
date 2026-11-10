@@ -77,3 +77,15 @@ MSVC + vcpkg (curl, nlohmann-json, cpp-httplib, poppler).
   build\Release\dumy.exe [--no-browser|--console|--ingest|--chat-model X]
 - Server: http://127.0.0.1:8085/  |  tests use curl.exe + UTF-8 JSON files.
 - Backup of the index exists: data_backup_20261013_221930/
+
+## 2026-11-10 — production pass (phases 1-8)
+
+- One canonical pipeline (`src/rag_pipeline.cpp`); clean Release build, 0 warnings.
+- Conservative Azerbaijani token estimate; context reserve from the real prompt;
+  automatic half-chunk retry on `context exceeded`; no raw HTTP errors to users.
+- Deterministic feed parsing (120 bas x 25 kg x 30 gun = 90 000 kg).
+- ASCII->Azerbaijani normalization + local sentence correction (0.02 s).
+- Repetition/off-domain quality gate; short honest no-context answers.
+- DuckDuckGo HTML search + Wikipedia fallback, kill switch, 10-minute cache.
+- API key, per-IP rate limit, CORS allow-list, loopback-only upload/ingest.
+- `tests/run_all.ps1` + `tests/expected/cases.json` regression suite.

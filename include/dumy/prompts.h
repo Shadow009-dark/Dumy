@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "dumy/common.h"
+#include "dumy/az_quality.h"
 #include "dumy/vector_store.h"
 
 namespace dumy {
@@ -330,18 +331,15 @@ inline const char* OLLAMA_DOWN_MESSAGE =
 // "No context" note. The internet must only be mentioned when a web search
 // actually ran - with web_search_enabled=false the note is PDF-only.
 inline std::string no_context_note(bool web_used) {
-    std::string s = "Qeyd: bu sual üzrə ";
-    s += web_used ? "PDF mənbələrimdə və internet axtarışında" : "PDF mənbələrimdə";
-    s += " kifayət qədər məlumat tapılmadı, ona görə cavab modelin ümumi "
-         "bilikləri əsasında verilib [Ümumi bilik].";
-    return s;
+    return std::string("Qeyd: cavab ") +
+           (web_used ? "[Ümumi bilik] və internet" : "[Ümumi bilik]") +
+           " əsasında verilib; vacib qərarlar üçün mənbəni yoxlayın.";
 }
 
 // Used when retrieval found only topically-related but irrelevant PDF text:
 // the answer must say the uploaded documents do not cover the question.
 inline const char* NO_RELEVANT_CONTEXT_NOTE =
-    "Qeyd: yüklənmiş sənədlərdə (PDF) bu sual üzrə məlumat tapılmadı - cavab ümumi "
-    "biliklər əsasında verilib [Ümumi bilik]. Dəqiqlik üçün məlumatı müstəqil yoxlayın.";
+    "Qeyd: PDF sənədlərində bu sual üzrə məlumat yoxdur; cavab [Ümumi bilik] əsasında verilib.";
 
 // ---------------------------------------------------------------------------
 // Prompt builders
@@ -475,105 +473,6 @@ inline std::string build_relevance_check_user_message(const std::string& questio
            "- Sözün yalnız bir hissəsi üst-üstə düşürsə (məsələn \"şəkər\" və \"şəkərçörək\"), bu cavab sayılmır.\n"
            "- Yalnız bir söz yaz: BELI və ya XEYR.\n\n"
            "SUAL: " + question + "\n\nKONTEKST:\n" + snippets + "\n\nCAVAB:";
-}
-
-// ---------------------------------------------------------------------------
-// Calculation questions whose inputs are missing (feed per head / period)
-// ---------------------------------------------------------------------------
-namespace feed_detail {
-inline long long number_before(const std::string& folded, const std::string& word) {
-    const size_t p = folded.find(" " + word);
-    if (p == std::string::npos) return 0;
-    size_t end = p;
-    while (end > 0 && folded[end - 1] == ' ') --end;
-    size_t begin = end;
-    while (begin > 0 && std::isdigit(static_cast<unsigned char>(folded[begin - 1]))) --begin;
-    if (begin == end) return 0;
-    try {
-        return std::stoll(folded.substr(begin, end - begin));
-    } catch (...) {
-        return 0;
-    }
-}
-
-inline std::string fmt(long long v) {
-    std::string s = std::to_string(v);
-    std::string out;
-    int count = 0;
-    for (size_t i = s.size(); i > 0; --i) {
-        out.push_back(s[i - 1]);
-        if (++count == 3 && i > 1) { out.push_back(' '); count = 0; }
-    }
-    std::reverse(out.begin(), out.end());
-    return out;
-}
-
-inline std::string kg(double v) { return fmt(static_cast<long long>(std::llround(v))); }
-}  // namespace feed_detail
-
-// "<N> baş ... <M> gün(lük) yem ... nə qədər" - a calculation that needs a
-// live weight and a ration rate, neither of which is in the question.
-inline bool is_feed_calculation_question(const std::string& question) {
-    const std::string q = " " + az_fold(question) + " ";
-    bool digit = false;
-    for (char c : q)
-        if (std::isdigit(static_cast<unsigned char>(c))) { digit = true; break; }
-    if (!digit) return false;
-    const bool heads = q.find(" bas ") != std::string::npos;
-    const bool feed = q.find("yem") != std::string::npos;
-    const bool period = q.find(" gun") != std::string::npos ||
-                        q.find(" ay") != std::string::npos ||
-                        q.find(" heft") != std::string::npos;
-    const bool asks = q.find("ne qeder") != std::string::npos ||
-                      q.find("nece") != std::string::npos ||
-                      q.find("hesabla") != std::string::npos ||
-                      q.find("lazim") != std::string::npos ||
-                      q.find("teleb") != std::string::npos;
-    return heads && feed && period && asks;
-}
-
-// Never invents a silent number: every value not present in the question is
-// labelled "Fərziyyə", units are explicit and no [Mənbə: ...] is attached.
-inline std::string build_feed_calculation_answer(const std::string& question) {
-    const std::string q = " " + az_fold(question) + " ";
-    const long long heads = feed_detail::number_before(q, "bas");
-    const long long days = feed_detail::number_before(q, "gun");
-    if (heads <= 0 || days <= 0) {
-        return "Bu hesablama üçün baş sayı və dövr (gün) lazımdır, amma sualda onları "
-               "dəqiq tapmadım. Zəhmət olmasa belə yazın: \"120 baş, 30 gün, bir başın "
-               "canlı çəkisi 300 kq, günlük norma 2.5%\".";
-    }
-    const double weight = 300.0;  // assumption, never presented as sourced
-    const double rate = 2.5;      // assumption (general literature range 1.6-3%)
-    const double daily = static_cast<double>(heads) * weight * rate / 100.0;
-    const double total = daily * static_cast<double>(days);
-    std::ostringstream os;
-    os << "Hesablama üçün sualda olmayan iki kəmiyyət lazımdır: bir başın canlı çəkisi "
-          "(kq) və günlük yem norması. Onları sənəd məlumatı kimi təqdim etmirəm - "
-          "aşağıda açıq fərziyyə kimi göstərirəm.\n\n"
-          "Düstur [Ümumi bilik]:\n"
-          "- Gündəlik yem (kq/gün) = baş sayı × canlı çəki (kq/baş) × norma (% canlı çəki) ÷ 100\n"
-          "- Dövr üçün yem (kq) = gündəlik yem (kq/gün) × gün sayı\n"
-          "- 1 ton = 1000 kq\n\n"
-          "Sualınızdan götürülən dəyərlər:\n"
-          "- Baş sayı: " << feed_detail::fmt(heads) << " baş\n"
-          "- Dövr: " << feed_detail::fmt(days) << " gün\n\n"
-          "Fərziyyə 1: bir başın canlı çəkisi = 300 kq (sualda yoxdur; nümunə dəyərdir).\n"
-          "Fərziyyə 2: günlük yem norması = canlı çəkinin 2.5%-i (sualda yoxdur; "
-          "ədəbiyyatda ümumi aralıq 1.6-3% göstərilir, dəqiq norma yemin tərkibindən və "
-          "heyvanın vəziyyətindən asılıdır).\n\n"
-          "Nümunə hesablama (yalnız bu fərziyyələrlə):\n"
-          "- Gündəlik: " << feed_detail::fmt(heads) << " × 300 × 2.5 ÷ 100 = "
-       << feed_detail::kg(daily) << " kq/gün\n"
-          "- " << feed_detail::fmt(days) << " gün: " << feed_detail::kg(daily) << " × "
-       << feed_detail::fmt(days) << " = " << feed_detail::kg(total) << " kq = "
-       << feed_detail::kg(total / 1000.0) << " ton\n\n"
-          "Dəqiq cavab üçün bir başın canlı çəkisini (kq) və istifadə etdiyiniz günlük "
-          "yem normasını (% və ya kq/gün) yazın - hesablamanı sizin rəqəmlərinizlə "
-          "yeniləyəcəyəm.\n"
-          "Qeyd: fərziyyə ilə götürülən rəqəmlər heç bir sənədə istinad etmir; dəqiqlik "
-          "üçün öz məlumatlarınızla yoxlayın.";
-    return os.str();
 }
 
 // Compact verification prompt: the checker returns a SHORT structured verdict

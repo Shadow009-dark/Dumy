@@ -58,8 +58,8 @@ struct Config {
     float rerank_skip_margin = 0.05f;   // Step 4: skip rerank when cosine top-1 is this far ahead
     int context_budget_tokens = 0;      // 0 = auto (num_ctx - prompt/history/answer)
     int map_reduce_threshold_tokens = 6000;  // Step 3: only above this map-reduce runs
-    int num_ctx = 8192;                 // Ollama context window (6 GB VRAM friendly)
-    int num_predict_draft = 1000;       // cap on draft answer length (tokens)
+    int num_ctx = 4096;                 // Ollama context window (6 GB VRAM friendly)
+    int num_predict_draft = 500;        // cap on draft answer length (tokens)
     std::string keep_alive = "-1";      // -1 = Ollama never unloads the model
 
     // --- Step 5: fast path for short factual questions ---------------------
@@ -143,6 +143,26 @@ struct Config {
     bool expansion_skip_for_simple = true;
     bool expansion_skip_for_general = true;
     int expansion_max_simple_words = 10;
+
+    // --- Context budgeting (Phase 2) -------------------------------------
+    double token_chars_per_token = 2.6;  // conservative Azerbaijani estimate
+    int context_safety_margin = 160;     // extra tokens kept free
+
+    // --- API exposure (Phase 8) ------------------------------------------
+    std::string api_key;                 // empty = no key required
+    std::vector<std::string> allowed_origins = {
+        "http://localhost:8085", "http://127.0.0.1:8085"};
+    int rate_limit_per_minute = 20;      // per IP; 0 = disabled
+    int max_question_chars = 2000;
+    int max_body_kb = 256;               // JSON body limit for /chat
+    bool log_questions = false;          // do not log user text by default
+
+    // --- Web search (Phase 6) --------------------------------------------
+    std::string web_engine = "ddg";      // ddg | searxng | wikipedia
+    bool web_kill_switch = false;        // hard off switch
+    int web_search_timeout_sec = 3;      // total per engine call
+    int web_memory_cache_minutes = 10;   // in-process result cache
+    int max_general_sentences = 5;       // no-context answer cap
 
     // --- Runtime (not from JSON) ---
     std::string config_path;            // absolute path of the loaded config file

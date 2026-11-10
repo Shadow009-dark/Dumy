@@ -121,6 +121,15 @@ inline size_t estimate_tokens(const std::string& text) {
     return (words * 8) / 5;
 }
 
+// Conservative estimate for Azerbaijani prompt budgeting. Real tokenizers use
+// ~2.2-3.2 characters per token for this language; words*1.6 underestimated a
+// 4.3 k-token prompt as 1.2 k and let Ollama answer HTTP 400.
+inline size_t estimate_tokens_az(const std::string& text, double chars_per_token = 2.6) {
+    if (text.empty()) return 0;
+    if (chars_per_token < 1.0) chars_per_token = 2.6;
+    return static_cast<size_t>(std::ceil(static_cast<double>(text.size()) / chars_per_token));
+}
+
 // Removes byte sequences that are not valid UTF-8 (PDF/HTML extraction and
 // byte-level substr() can split multi-byte characters). JSON serializers
 // reject invalid UTF-8, so this runs before anything is dumped.

@@ -7,6 +7,7 @@
 #include <cstring>
 #include <future>
 #include <set>
+#include <sstream>
 #include <unordered_map>
 
 #include "dumy/chunker.h"
@@ -25,6 +26,42 @@ struct StageTimer {
             .count();
     }
 };
+
+// Result for a single sub-question.
+struct SingleAnswer {
+    std::string answer;
+    std::vector<Chunk> used_chunks;
+    std::string qtype;
+    bool refused = false;
+    bool used_web = false;
+    bool used_map_reduce = false;
+    bool used_self_check = false;
+    bool self_check_failed = false;
+    int self_check_retries = 0;
+    bool from_own_knowledge = false;
+    bool no_sources = false;
+    bool smalltalk = false;
+    std::string warning;
+};
+
+// Processes a single question through the full pipeline.
+// Returns a SingleAnswer with all metadata.
+SingleAnswer process_single_question(const std::string& question,
+                                     const std::string& session_id,
+                                     const Config& cfg,
+                                     OllamaClient& ollama,
+                                     VectorStorePtr store,
+                                     Bm25Index& bm25,
+                                     WebSearch& web,
+                                     Retriever& retriever,
+                                     Reranker& reranker,
+                                     SessionManager& sessions,
+                                     const std::string& chat_model,
+                                     const std::string& helper_model,
+                                     const std::string& selfcheck_model,
+                                     const std::string& embedding_model,
+                                     const std::function<void(const std::string&)>& on_delta,
+                                     const std::function<void(const std::string&)>& on_status);
 
 // Removes stray map-reduce summary labels ([Xülasə: ...]) that a model may
 // still cite despite the prompt; only [Mənbə:], [İnternet:], [Ümumi bilik]
@@ -76,6 +113,8 @@ std::string strip_latest(const std::string& model) {
     if (ends_with(model, ":latest")) return model.substr(0, model.size() - 7);
     return model;
 }
+
+
 
 // Honesty guard: a [Mənbə: ...] / [İnternet: ...] label must point at a
 // source that was actually in the context. Models occasionally invent URLs
@@ -170,10 +209,10 @@ double word_jaccard(const std::string& a, const std::string& b) {
     return uni ? static_cast<double>(inter) / static_cast<double>(uni) : 0.0;
 }
 
-size_t total_tokens(const std::vector<Chunk>& chunks) {
-    size_t t = 0;
-    for (const auto& c : chunks) t += estimate_tokens(c.text);
-    return t;
+size_t total_tokens(const std::vector<Chunk>& chunks, double chars_per_token) {
+    size_t sum = 0;
+    for (const auto& c : chunks) sum += estimate_tokens_az(c.text, chars_per_token);
+    return sum;
 }
 
 // (The sources footer is no longer appended to the answer text: the UI shows
@@ -345,15 +384,131 @@ bool RagPipeline::initialize(std::string* err) {
     return true;
 }
 
+// Step 1: load both models before the server reports ready, with exactly the
+// options a real request uses, then verify through /api/ps. This removes the
+// 5-20 s model load from the FIRST question and from every later swap.
+bool RagPipeline::warmup(std::string* err) {
+    warmup_ = WarmupInfo();
+    if (!ollama_ok_) {
+        warmup_.note = "Ollama bağlı deyil - warm-up buraxıldı";
+        if (err) *err = warmup_.note;
+        return false;
+    }
+    warmup_.attempted = true;
+    bool ok = true;
+
+    // --- main model FIRST: 1 token, identical options to the draft request --
+    // Order matters: loading the 7B evicts a model loaded earlier on this
+    // 6 GB GPU, so the CPU-only embedding model is warmed after it.
+    {
+        std::string cerr;
+        ChatTiming ct;
+        StageTimer t;
+        const std::string r = ollama_.chat(chat_model_, {{"user", "salam"}},
+                                           cfg_.chat_options(1, 0.3), &cerr, &ct);
+        warmup_.main_ready = !r.empty();
+        warmup_.main_load_ms = ct.load_ms;
+        log_model_call("warmup.draft", chat_model_,
+                       static_cast<long long>(t.ms()), ct.load_ms,
+                       ct.prompt_eval_ms, ct.eval_ms, ct.prompt_tokens,
+                       ct.eval_tokens);
+        if (!warmup_.main_ready) {
+            warmup_.note = "main model warm-up failed: " + cerr;
+            log_warn(warmup_.note);
+            ok = false;
+        }
+    }
+
+    // --- bge-m3 second: tiny embed call, num_gpu=0 (CPU), keep_alive -1 -----
+    {
+        std::vector<std::vector<float>> out;
+        std::string eerr;
+        ChatTiming et;
+        StageTimer t;
+        const bool eok = ollama_.embed(embedding_model_, {"salam"}, out, &eerr, &et);
+        warmup_.embed_ready = eok && !out.empty();
+        warmup_.embed_load_ms = et.load_ms;
+        log_model_call("warmup.embed", embedding_model_,
+                       static_cast<long long>(t.ms()), et.load_ms,
+                       et.prompt_eval_ms, et.eval_ms, et.prompt_tokens,
+                       et.eval_tokens);
+        if (!warmup_.embed_ready) {
+            warmup_.note = "embed warm-up failed: " + eerr;
+            log_warn(warmup_.note);
+            ok = false;
+        }
+    }
+
+    // --- verify both are still resident (and bge-m3 is on CPU) -------------
+    {
+        std::string perr;
+        const auto running = ollama_.running_models(&perr);
+        auto same_model = [](const std::string& a, const std::string& b) {
+            return a == b || strip_latest(a) == strip_latest(b);
+        };
+        bool embed_resident = false;
+        for (const auto& m : running) {
+            if (same_model(m.name, chat_model_)) warmup_.main_resident = true;
+            if (same_model(m.name, embedding_model_)) {
+                embed_resident = true;
+                warmup_.embed_on_cpu = (m.size_vram == 0);
+            }
+        }
+        if (running.empty()) {
+            warmup_.note = "could not verify loaded models via /api/ps: " + perr;
+            log_warn(warmup_.note);
+        } else {
+            if (!warmup_.main_resident) {
+                log_warn("WARN: '" + chat_model_ +
+                         "' yüklənməyib / yaddaşdan çıxarılıb (yenidən yüklənəcək)");
+            }
+            if (!embed_resident) {
+                log_warn("WARN: embedding modeli '" + embedding_model_ +
+                         "' warm-up-dan sonra yüklü deyil (ilk sorğuda yenidən yüklənəcək)");
+            } else if (!warmup_.embed_on_cpu) {
+                log_warn("WARN: embedding modeli '" + embedding_model_ +
+                         "' GPU-da görünür - num_gpu=0 tətbiq olunmayıb");
+            }
+        }
+        log_info("Warm-up: draft=" + chat_model_ +
+                 " (load=" + std::to_string(warmup_.main_load_ms) + "ms, resident=" +
+                 (warmup_.main_resident ? "1" : "0") + ") | embed=" +
+                 embedding_model_ + " (load=" + std::to_string(warmup_.embed_load_ms) +
+                 "ms, CPU=" + (warmup_.embed_on_cpu ? "1" : "0") + ")");
+    }
+    if (err && !ok) *err = warmup_.note;
+    return ok;
+}
+
 std::vector<Chunk> RagPipeline::rerank_or_trim(const std::string& question,
                                                std::vector<Chunk> candidates,
                                                QuestionType qtype,
+                                               float score_margin,
                                                std::string* err) const {
+    const size_t keep = static_cast<size_t>(std::max(1, cfg_.rerank_top_n));
+
+    // Step 4: when the vector ranking already separates the head clearly
+    // (top-1 cosine is far ahead of the top-k tail), the LLM rerank call adds
+    // 10-20 s and changes nothing - skip it and keep retrieval order.
+    if (cfg_.rerank_skip_margin > 0.0f && score_margin >= cfg_.rerank_skip_margin) {
+        // Keep the same cap the LLM reranker would have used (default 6): the
+        // skipped call must not leave a larger context than the scored path,
+        // otherwise prompt + num_predict can exceed num_ctx.
+        const size_t skip_keep =
+            std::min(keep, static_cast<size_t>(std::max(1, cfg_.rerank_max_candidates)));
+        log_info("rerank skipped: cosine margin " + std::to_string(score_margin) +
+                 " >= " + std::to_string(cfg_.rerank_skip_margin) + " (keep=" +
+                 std::to_string(skip_keep) + ")");
+        if (candidates.size() > skip_keep) candidates.resize(skip_keep);
+        if (err) err->clear();
+        return candidates;
+    }
+
     const bool fast_simple = cfg_.fast_mode &&
                              (qtype == QuestionType::SimpleFact ||
                               qtype == QuestionType::General);
     if (fast_simple) {
-        // fast mode: skip step 4 (rerank) - RRF order is already good.
+        // fast mode: skip reranking - RRF order is already good.
         if (candidates.size() > static_cast<size_t>(cfg_.top_k_simple)) {
             candidates.resize(static_cast<size_t>(
                 std::max(cfg_.top_k_simple, cfg_.rerank_top_n / 2)));
@@ -361,26 +516,24 @@ std::vector<Chunk> RagPipeline::rerank_or_trim(const std::string& question,
         if (err) err->clear();
         return candidates;
     }
-    return reranker_.rerank(question, candidates,
-                            static_cast<size_t>(cfg_.rerank_top_n), err);
+    return reranker_.rerank(question, candidates, keep, err);
 }
 
 std::vector<Chunk> RagPipeline::map_reduce_summarize(
     const std::string& question, const std::vector<Chunk>& chunks) const {
     // Split into groups so each summary fits the context budget.
     const size_t budget = static_cast<size_t>(std::max(cfg_.context_budget_tokens, 800));
-    const size_t total = total_tokens(chunks);
+    const size_t total = total_tokens(
+        chunks, cfg_.token_chars_per_token > 0.0 ? cfg_.token_chars_per_token : 2.6);
     size_t group_count = (total + budget - 1) / budget;
     if (group_count < 2) group_count = 2;
     if (group_count > 5) group_count = 5;
 
     const size_t per_group = (chunks.size() + group_count - 1) / group_count;
     std::vector<Chunk> summaries;
-    ChatOptions opts;
-    opts.temperature = 0.1;
-    opts.num_predict = 400;
-    opts.num_ctx = cfg_.num_ctx;  // match the draft ctx so nothing reloads
-    opts.keep_alive = cfg_.keep_alive;
+    // Centralized options: same num_ctx/keep_alive as the draft call, so the
+    // summary pass never triggers a model reload.
+    ChatOptions opts = cfg_.chat_options(150, 0.1);
 
     for (size_t g = 0; g < group_count; ++g) {
         size_t begin = g * per_group;
@@ -480,11 +633,86 @@ AnswerResult RagPipeline::answer(const std::string& question,
                                  const StatusFn& on_status) const {
     AnswerResult res;
     StageTimer t_total;
-    const std::string q = trim(question);
+    const std::string q_original = trim(question);
+    // Restore Azerbaijani letters for routing/retrieval only when the input is
+    // pure ASCII; words are replaced only when they are in the local table.
+    const std::string q = normalize_az_input(q_original);
     if (q.empty()) {
         res.answer = "Sualınızı yazın - məmnuniyyətlə kömək edərəm.";
         if (on_delta) on_delta(res.answer);
         return res;
+    }
+
+    // --- 0a. Identity question about the bot: direct answer, no retrieval ---
+    if (is_identity_question(q)) {
+        log_info("fastpath: identity question");
+        res.smalltalk = true;
+        res.qtype = "identity";
+        res.no_sources = true;
+        const std::string creator = cfg_.creator.empty() ? "DUMY Team" : cfg_.creator;
+        res.answer = "Mən DUMY-yəm, aqronomluq və maldarlıq üzrə köməkçiyəm. "
+                     "Məni " + creator + " hazırlayıb.";
+        if (on_delta) on_delta(res.answer);
+        return res;
+    }
+
+    // --- 0b. Date / weekday question: answer from the system clock ----------
+    if (is_datetime_question(q)) {
+        log_info("fastpath: datetime question");
+        res.smalltalk = true;
+        res.qtype = "datetime";
+        res.no_sources = true;
+        res.answer = "Bu gün " + get_current_datetime_az() + ".";
+        if (on_delta) on_delta(res.answer);
+        return res;
+    }
+
+    // --- 0b2. Feed calculation with missing inputs: explicit assumptions ----
+    // "120 baş mal-qaranın 30 günlük yemi nə qədərdir?" needs live weight and a
+    // ration rate that are not in the question; answer deterministically with
+    // the formula, labelled assumptions and no [Mənbə: ...] labels.
+    if (is_feed_calculation_question(q)) {
+        log_info("fastpath: feed calculation - explicit assumptions, no PDF citations");
+        res.qtype = "calculation";
+        res.from_own_knowledge = true;
+        res.no_sources = true;
+        res.answer = build_feed_calculation_answer(q);
+        if (on_delta) on_delta(res.answer);
+        return res;
+    }
+
+    // --- 0c. Arithmetic: computed here, never from PDF context --------------
+    const bool arithmetic_q = is_arithmetic_question(q);
+    if (arithmetic_q) {
+        double value = 0.0;
+        // Azerbaijani word form ("15 vurulsun 12", "20-dən 5 çıx") is turned
+        // into a plain expression first; symbol forms come back unchanged.
+        const std::string arith_expr = az_arithmetic_expression(q);
+        if (!arith_expr.empty() && eval_simple_arithmetic(arith_expr, value)) {
+            log_info("fastpath: arithmetic question [" + arith_expr + "] = " +
+                     format_arithmetic_result(value));
+            res.qtype = "arithmetic";
+            res.smalltalk = true;
+            res.no_sources = true;
+            res.answer = "Nəticə: " + format_arithmetic_result(value) + ".";
+            if (on_delta) on_delta(res.answer);
+            return res;
+        }
+        // A bare operation we cannot parse must never be guessed by the
+        // model: ask for a clearer expression instead.
+        if (!arith_expr.empty() || has_arithmetic_operator(q)) {
+            log_info("arithmetic: operation could not be parsed - asking to rephrase");
+            res.qtype = "arithmetic";
+            res.smalltalk = true;
+            res.no_sources = true;
+            res.answer = ARITHMETIC_REPHRASE_MESSAGE;
+            if (on_delta) on_delta(res.answer);
+            return res;
+        }
+        // A word problem we cannot evaluate: still answer with general
+        // knowledge, never with unrelated PDF citations (context dropped
+        // after retrieval below).
+        log_info("arithmetic-like question could not be parsed - answering without PDF context");
     }
 
     // --- 0. Small-talk fast path: greetings/thanks/bye, NO LLM call -------
@@ -507,11 +735,88 @@ AnswerResult RagPipeline::answer(const std::string& question,
         return res;
     }
 
+    // --- 0d. Typed sentence without Azerbaijani letters ---------------------
+    // "men sabah mekteve gedecem" is a spelling correction request, not a
+    // knowledge question. The local dictionary restores the letters, so this
+    // is deterministic and needs no model call.
+    if (looks_like_bare_sentence(q_original, q)) {
+        log_info("fastpath: bare sentence correction (local dictionary)");
+        res.qtype = "language_task";
+        res.no_sources = true;
+        res.from_own_knowledge = true;
+        res.answer = deterministic_sentence_correction(q_original);
+        if (on_delta) on_delta(res.answer);
+        return res;
+    }
+
     // --- 1. Ollama availability --------------------------------------------
     if (!ollama_ok_) {
         res.warning = "ollama_down";
         res.answer = OLLAMA_DOWN_MESSAGE;
         if (on_delta) on_delta(res.answer);
+        return res;
+    }
+
+    // --- 1b. Language tasks: no retrieval, no context, no notes ------------
+    // Rewrite/correct/translate/define/invent-a-sentence requests are text
+    // tasks, not knowledge questions: answer directly with only the result.
+    if (is_language_task_question(q)) {
+        log_info("fastpath: language task (no retrieval, no PDF context)");
+        res.qtype = "language_task";
+        res.no_sources = true;
+        res.from_own_knowledge = true;
+        const bool letters = is_letters_task(az_fold(q));
+        const std::string prompt = build_language_task_prompt(q);
+        ChatOptions task_opts =
+            cfg_.chat_options(std::min(cfg_.num_predict_draft, 300), 0.0);
+        std::string terr;
+        ChatTiming ttiming;
+        StageTimer t_task;
+        std::string raw =
+            on_delta ? ollama_.chat_stream(chat_model_, {{"user", prompt}}, task_opts,
+                                           on_delta, &terr, &ttiming)
+                     : ollama_.chat(chat_model_, {{"user", prompt}}, task_opts, &terr,
+                                    &ttiming);
+        log_model_call("language_task", chat_model_,
+                       static_cast<long long>(t_task.ms()), ttiming.load_ms,
+                       ttiming.prompt_eval_ms, ttiming.eval_ms, ttiming.prompt_tokens,
+                       ttiming.eval_tokens, ttiming.done_reason);
+        std::string out = clean_language_task_output(raw);
+        int attempts = 1;
+        if (letters && !out.empty()) {
+            const std::string missing = missing_az_letters(out);
+            if (!missing.empty()) {
+                log_warn("language task: sentence misses letters - retrying once");
+                std::string rerr;
+                ChatTiming rtiming;
+                StageTimer t_retry;
+                const std::string retry_prompt =
+                    prompt + "\n\nDiqqət: əvvəlki cümlədə bu hərflər yox idi: " +
+                    missing + ". İndi hamısı olan YENİ bir cümlə yaz.";
+                const std::string raw2 = ollama_.chat(
+                    chat_model_, {{"user", retry_prompt}}, task_opts, &rerr, &rtiming);
+                log_model_call("language_task_retry", chat_model_,
+                               static_cast<long long>(t_retry.ms()), rtiming.load_ms,
+                               rtiming.prompt_eval_ms, rtiming.eval_ms,
+                               rtiming.prompt_tokens, rtiming.eval_tokens,
+                               rtiming.done_reason);
+                ++attempts;
+                const std::string out2 = clean_language_task_output(raw2);
+                if (!out2.empty() &&
+                    missing_az_letters(out2).size() < missing.size())
+                    out = out2;
+            }
+        }
+        if (out.empty()) {
+            out = HONEST_FAILURE_MESSAGE;
+            log_warn("language task: no usable output");
+        } else if (!letters && az_fold(q).find("cumle") != std::string::npos &&
+                   out.back() != '.' && out.back() != '!' && out.back() != '?') {
+            out += '.';
+        }
+        log_info("language task: attempts=" + std::to_string(attempts) +
+                 " chars=" + std::to_string(out.size()));
+        res.answer = out;
         return res;
     }
 
@@ -523,18 +828,32 @@ AnswerResult RagPipeline::answer(const std::string& question,
     // search - greetings are already handled by the fast path above.
     const bool short_non_topic =
         meaningful_word_count(q) < 3 && qtype == QuestionType::General;
+    // Step 5: short factual question -> expansion -> retrieval -> draft only.
+    // Rerank, map-reduce and self-check are reserved for long / multi-document
+    // questions where they actually change the answer.
+    const bool fast_path =
+        cfg_.fast_path_enabled && qtype == QuestionType::SimpleFact &&
+        meaningful_word_count(q) <= static_cast<size_t>(std::max(1, cfg_.fast_path_max_words));
     const int top_k = retriever_.top_k_for(qtype);
+    const double cpt = cfg_.token_chars_per_token > 0.0 ? cfg_.token_chars_per_token : 2.6;
     const double ms_route = t_route.ms();
 
     // --- 2b. query expansion (one model call, helper model) ----------------
     StageTimer t_expand;
+    // Expansion is an extra model call; general/off-topic and low-information
+    // messages gain nothing from it (it once cost 20 s on a cold model).
+    const bool skip_expansion =
+        short_non_topic ||
+        (qtype == QuestionType::General && cfg_.expansion_skip_for_general);
     const std::vector<std::string> queries =
-        short_non_topic ? std::vector<std::string>{q} : retriever_.expand_query(q, qtype);
+        skip_expansion ? std::vector<std::string>{q} : retriever_.expand_query(q, qtype);
     const double ms_expand = t_expand.ms();
+    log_info("expansion queries (" + std::to_string(queries.size()) +
+             (skip_expansion ? ", skipped" : "") + "): " + join(queries, " | "));
 
     // --- 3. PDF hybrid retrieval + web search IN PARALLEL ------------------
     StageTimer t_parallel;
-    std::future<std::vector<Chunk>> pdf_fut = std::async(
+    std::future<Retriever::StoreResult> pdf_fut = std::async(
         std::launch::async, [&] { return retriever_.retrieve_store(queries, (size_t)top_k); });
 
     struct WebOut {
@@ -542,9 +861,21 @@ AnswerResult RagPipeline::answer(const std::string& question,
         std::string warning;
     };
     std::future<WebOut> web_fut;
-    const bool web_enabled = cfg_.web_search_enabled && !short_non_topic;
+    // Step 6: web runs in parallel with PDF retrieval, but never for questions
+    // that are answered directly (identity / arithmetic / date-time) and never
+    // when the config flag is off. With config.json web_search_enabled=false
+    // the Wikipedia fallback is not called at all.
+    const bool direct_answer = is_identity_question(q) ||
+                               is_arithmetic_question(q) ||
+                               is_datetime_question(q);
+    const bool web_enabled =
+        cfg_.web_search_enabled && !short_non_topic && !direct_answer;
     if (cfg_.web_search_enabled && short_non_topic) {
         log_info("fastpath: web skipped (short non-topic message)");
+    } else if (cfg_.web_search_enabled && direct_answer) {
+        log_info("fastpath: web skipped (identity/arithmetic/date-time question)");
+    } else if (!cfg_.web_search_enabled) {
+        log_info("web search disabled in config.json (web_search_enabled=false)");
     }
     if (web_enabled) {
         web_fut = std::async(std::launch::async, [&] {
@@ -554,8 +885,110 @@ AnswerResult RagPipeline::answer(const std::string& question,
         });
     }
 
-    std::vector<Chunk> pdf_chunks = pdf_fut.get();
+    Retriever::StoreResult pdf_result = pdf_fut.get();
+    std::vector<Chunk> pdf_chunks = std::move(pdf_result.chunks);
+    const float pdf_score_margin = pdf_result.score_margin;  // Step 4 signal
     const double ms_pdf = t_parallel.ms();
+    log_info("retrieval scores: top1=" + std::to_string(pdf_result.max_score) +
+             " margin=" + std::to_string(pdf_result.score_margin) +
+             " chunks=" + std::to_string(pdf_chunks.size()));
+
+    // Step 7: never attach unrelated PDF citations. When the best vector hit
+    // is below min_score the matched chunks are noise (e.g. "Telefon nədir?"),
+    // so the answer comes from general knowledge instead.
+    if (pdf_result.max_score > 0.0f && pdf_result.max_score < cfg_.min_score) {
+        log_info("retrieval guard: top cosine " + std::to_string(pdf_result.max_score) +
+                 " < min_score " + std::to_string(cfg_.min_score) +
+                 " - PDF context dropped");
+        pdf_chunks.clear();
+    }
+    bool pdf_relevance_failed = false;
+    // --- 3a2. General-knowledge question: PDFs are not sources --------------
+    // "Fotosintez nədir?" matched an animal-biochemistry chapter by word, but
+    // an agriculture book is not a source for a general-science definition.
+    // Without a livestock/agronomy term in the question, answer from general
+    // knowledge instead of citing the PDF.
+    if (is_general_knowledge_question(q) && !pdf_chunks.empty()) {
+        log_info("general-knowledge question: PDF context dropped (" +
+                 std::to_string(pdf_chunks.size()) +
+                 " chunks, no livestock/agronomy term)");
+        pdf_chunks.clear();
+        pdf_relevance_failed = true;
+    }
+    // --- 3b. Relevance gate: off-topic PDF hits must not become citations ---
+    // The cosine guard above cannot separate "şəkərçörək" from sugar-beet
+    // text (bge-m3 scores topically-related agri text high). Require a key
+    // noun of the question in a retained chunk, or ask the helper model a
+    // cheap yes/no question when lexical support is missing.
+    if (!pdf_chunks.empty() && cfg_.relevance_check_enabled) {
+        const std::vector<std::string> terms = relevance_key_terms(q);
+        const size_t probe = std::min<size_t>(pdf_chunks.size(), 6);
+        size_t matched = 0;
+        std::string missing;
+        for (const auto& t : terms) {
+            bool found = false;
+            for (size_t i = 0; i < probe && !found; ++i) {
+                for (const auto& w : az_words(pdf_chunks[i].text)) {
+                    if (az_words_match(t, w)) { found = true; break; }
+                }
+            }
+            if (found) {
+                ++matched;
+            } else {
+                if (!missing.empty()) missing += ",";
+                missing += t;
+            }
+        }
+        const double overlap = terms.empty()
+                                   ? 1.0
+                                   : static_cast<double>(matched) / static_cast<double>(terms.size());
+        // Generic action words ("hazırlanır") are already excluded from the
+        // key terms, so a sufficient overlap is real evidence. Requiring ALL
+        // terms dropped valid contexts (e.g. "qarın şişməsi" where a chunk
+        // says "şişkinlik"), so the share is used instead.
+        const bool lex_ok = !terms.empty() && matched >= 1 &&
+                            overlap >= cfg_.relevance_min_overlap;
+        const bool score_ok = matched >= 1 &&
+                              pdf_result.max_score >= cfg_.relevance_check_score;
+        bool keep = true;
+        std::string branch = "lexical";
+        if (!lex_ok && !score_ok) {
+            branch = "llm";
+            std::string snippets;
+            for (size_t i = 0; i < probe; ++i) {
+                snippets += "\n[" + std::to_string(i + 1) + "] ";
+                snippets += utf8_prefix(pdf_chunks[i].text, 500);
+            }
+            std::string rerr;
+            ChatTiming rtiming;
+            StageTimer t_rel;
+            const std::string verdict = ollama_.chat(
+                helper_model_,
+                {{"user", build_relevance_check_user_message(q, snippets)}},
+                cfg_.chat_options(6, 0.0), &rerr, &rtiming);
+            log_model_call("relevance_check", helper_model_,
+                           static_cast<long long>(t_rel.ms()), rtiming.load_ms,
+                           rtiming.prompt_eval_ms, rtiming.eval_ms,
+                           rtiming.prompt_tokens, rtiming.eval_tokens);
+            const std::string v = trim(az_fold(verdict));
+            const bool yes = v.rfind("beli", 0) == 0 || v.rfind("yes", 0) == 0;
+            const bool no = v.rfind("xeyr", 0) == 0 || v.rfind("yox", 0) == 0 ||
+                            v.rfind("no", 0) == 0;
+            if (yes) branch += "_yes";
+            else if (no) branch += "_no";
+            else branch += "_unknown";
+            keep = !(no && !yes);  // failed/unparsable check -> keep sources
+        }
+        log_info("relevance gate: branch=" + branch +
+                 " score=" + std::to_string(pdf_result.max_score) +
+                 " overlap=" + std::to_string(matched) + "/" +
+                 std::to_string(terms.size()) + " key_terms=[" + join(terms, ",") +
+                 "] missing=[" + missing + "] decision=" + (keep ? "keep" : "drop"));
+        if (!keep) {
+            pdf_chunks.clear();
+            pdf_relevance_failed = true;
+        }
+    }
     WebOut web_out;
     if (web_enabled) web_out = web_fut.get();
     const double ms_web = web_enabled ? t_parallel.ms() : 0.0;
@@ -570,6 +1003,12 @@ AnswerResult RagPipeline::answer(const std::string& question,
              " | PDF: " + std::to_string(candidates.size() - web_out.chunks.size()) +
              " | web: " + std::to_string(web_out.chunks.size()) +
              " | expansion: " + std::to_string(queries.size() - 1) + " alt-sual");
+    if (arithmetic_q) {
+        candidates.clear();       // word-problem fallback: no PDF context
+        res.used_web = false;
+        web_out.chunks.clear();
+        log_info("arithmetic: retrieval context dropped");
+    }
 
     // --- 4. rerank (skipped by fast mode for simple questions) -------------
     // Relevance gate: a short non-topic message must not get PDF/web chunks
@@ -583,9 +1022,27 @@ AnswerResult RagPipeline::answer(const std::string& question,
     std::string rk_err;
     std::vector<Chunk> selected;
     if (!candidates.empty()) {
-        selected = rerank_or_trim(q, std::move(candidates), qtype, &rk_err);
-        // Source diversity + near-duplicate removal for the final context.
-        selected = diversify(std::move(selected));
+        if (fast_path) {
+            // Step 5: no LLM rerank on the fast path - keep retrieval order,
+            // cap to top_k_simple and only remove duplicates / cap per source.
+            log_info("pipeline: FAST PATH (simple fact, " +
+                     std::to_string(meaningful_word_count(q)) +
+                     " words) - rerank skipped");
+            selected = diversify(std::move(candidates));
+            const size_t cap = static_cast<size_t>(std::max(1, cfg_.top_k_simple));
+            if (selected.size() > cap) selected.resize(cap);
+        } else if (qtype == QuestionType::General && cfg_.expansion_skip_for_general) {
+            log_info("pipeline: general question - rerank skipped");
+            selected = diversify(std::move(candidates));
+            const size_t cap = static_cast<size_t>(std::max(1, cfg_.top_k_simple));
+            if (selected.size() > cap) selected.resize(cap);
+        } else {
+            log_info("pipeline: full path (" + res.qtype + ")");
+            selected = rerank_or_trim(q, std::move(candidates), qtype,
+                                      pdf_score_margin, &rk_err);
+            // Source diversity + near-duplicate removal for the final context.
+            selected = diversify(std::move(selected));
+        }
     }
     const double ms_rerank = t_rerank.ms();
     if (!rk_err.empty()) log_warn("rerank: " + rk_err);
@@ -603,55 +1060,149 @@ AnswerResult RagPipeline::answer(const std::string& question,
     }
 
     // --- 5. map-reduce when the context is too large -----------------------
-    const bool do_map_reduce =
-        total_tokens(selected) > static_cast<size_t>(cfg_.context_budget_tokens) &&
-        selected.size() > 6;
+    // Step 3: the trigger is its own (much higher) threshold - ~3900 tokens
+    // fired on ordinary questions and paid 2-5 extra LLM calls for nothing.
+    const size_t mapred_limit =
+        static_cast<size_t>(std::max(1000, cfg_.map_reduce_threshold_tokens));
+    const bool do_map_reduce = !fast_path && total_tokens(selected, cpt) > mapred_limit &&
+                               selected.size() > 6;
     std::vector<Chunk> context_chunks = selected;
     if (do_map_reduce) {
-        log_info("Kontekst çox böyükdür (" + std::to_string(total_tokens(selected)) +
-                 " token) - map-reduce xülasələri işə salınır");
+        log_info("Kontekst çox böyükdür (" + std::to_string(total_tokens(selected, cpt)) +
+                 " token > " + std::to_string(mapred_limit) +
+                 ") - map-reduce xülasələri işə salınır");
         context_chunks = map_reduce_summarize(q, selected);
         res.used_map_reduce = true;
     }
 
-    // --- 6. draft answer (streamed) ----------------------------------------
-    std::vector<ChatMessage> messages;
-    messages.push_back({"system", SYSTEM_PROMPT});
-    for (const auto& m : sessions_.history(session_id)) messages.push_back(m);
-
-    std::string user_msg;
-    if (context_chunks.empty()) {
-        user_msg =
-            "KONTEKST: Bu sual üzrə PDF və ya internet məlumatı tapılmadı.\n"
-            "Cavabı öz biliklərinlə ver və mütləq [Ümumi bilik] etiketini qeyd et, "
-            "mənbəsiz faktları mənbəli kimi təqdim etmə.\n\nSUAL: " + q;
-    } else {
-        user_msg = build_context_block(context_chunks) + "\n\n" +
-                   build_draft_user_message(q);
+    // --- 5b. context budget from the ACTUAL request ------------------------
+    // estimate_tokens (words*1.6) underestimated Azerbaijani text by ~3x and
+    // let a 4.3 k-token request through a 1.2 k-token limit (HTTP 400). The
+    // reserve is now the real system prompt + history + question + answer cap.
+    {
+        size_t fixed = estimate_tokens_az(SYSTEM_PROMPT, cpt) +
+                       estimate_tokens_az(q, cpt) +
+                       static_cast<size_t>(std::max(0, cfg_.num_predict_draft)) +
+                       static_cast<size_t>(std::max(0, cfg_.context_safety_margin));
+        for (const auto& m : sessions_.history(session_id))
+            fixed += estimate_tokens_az(m.content, cpt) + 8;
+        const size_t limit = cfg_.num_ctx > static_cast<int>(fixed) + 256
+                                 ? static_cast<size_t>(cfg_.num_ctx) - fixed
+                                 : size_t(256);
+        const size_t before_trim = context_chunks.size();
+        while (context_chunks.size() > 1 && total_tokens(context_chunks, cpt) > limit) {
+            context_chunks.pop_back();  // lowest-ranked chunk first
+        }
+        if (context_chunks.size() != before_trim) {
+            log_info("context trimmed to fit num_ctx: " +
+                     std::to_string(before_trim) + " -> " +
+                     std::to_string(context_chunks.size()) + " chunks (limit=" +
+                     std::to_string(limit) + " est. tokens)");
+        }
     }
-    messages.push_back({"user", user_msg});
 
-    ChatOptions draft_opts;
-    draft_opts.temperature = 0.3;
-    draft_opts.num_ctx = cfg_.num_ctx;
-    draft_opts.num_predict = cfg_.num_predict_draft;  // 1200 (config; 6 GB VRAM)
-    draft_opts.keep_alive = cfg_.keep_alive;
+    // --- 6. draft answer (streamed) ----------------------------------------
+    const int requested_sentences = requested_sentence_count(q);
+    const std::string sentence_rule =
+        requested_sentences > 0
+            ? " Cavabı düz " + std::to_string(requested_sentences) + " cümlə ilə ver."
+            : std::string();
 
+    auto build_user_msg = [&](const std::vector<Chunk>& ctx) {
+        if (pdf_relevance_failed) {
+            return std::string(
+                       "KONTEKST: Yüklənmiş PDF sənədlərində bu sual üzrə məlumat YOXDUR. "
+                       "Sual aqronomiya/maldarlıq mövzusundan kənar ola bilər - bu halda imtina "
+                       "ETMƏ, ümumi biliklərinlə qısa, dəqiq və faydalı cavab ver. Heç bir "
+                       "[Mənbə: ...] etiketi yazma, yalnız [Ümumi bilik] istifadə et. Suala "
+                       "birbaşa, tam cavab yaz.") + sentence_rule + "\n\nSUAL: " + q;
+        }
+        if (ctx.empty()) return build_no_context_user_message(q, sentence_rule);
+        return build_context_block(ctx) + "\n\n" + build_draft_user_message(q);
+    };
+    auto build_messages = [&](const std::vector<Chunk>& ctx) {
+        std::vector<ChatMessage> msgs;
+        msgs.push_back({"system", SYSTEM_PROMPT});
+        for (const auto& m : sessions_.history(session_id)) msgs.push_back(m);
+        msgs.push_back({"user", build_user_msg(ctx)});
+        return msgs;
+    };
+
+    ChatOptions draft_opts = cfg_.chat_options(cfg_.num_predict_draft, 0.3);
     StageTimer t_draft;
     std::string derr;
     std::string draft;
     ChatTiming draft_timing;
-    if (on_delta) {
-        draft = ollama_.chat_stream(chat_model_, messages, draft_opts, on_delta, &derr,
-                                    &draft_timing);
-    } else {
-        draft = ollama_.chat(chat_model_, messages, draft_opts, &derr, &draft_timing);
+    std::vector<Chunk> attempt_chunks = context_chunks;
+    std::vector<ChatMessage> messages;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        messages = build_messages(attempt_chunks);
+        derr.clear();
+        draft = on_delta ? ollama_.chat_stream(chat_model_, messages, draft_opts, on_delta,
+                                              &derr, &draft_timing)
+                         : ollama_.chat(chat_model_, messages, draft_opts, &derr,
+                                        &draft_timing);
+        log_model_call(attempt == 0 ? "draft" : "draft_ctx_retry", chat_model_,
+                       static_cast<long long>(t_draft.ms()), draft_timing.load_ms,
+                       draft_timing.prompt_eval_ms, draft_timing.eval_ms,
+                       draft_timing.prompt_tokens, draft_timing.eval_tokens,
+                       draft_timing.done_reason);
+        if (!draft.empty()) break;
+        const bool too_large = derr.find("context") != std::string::npos ||
+                               derr.find("exceeds") != std::string::npos ||
+                               derr.find("400") != std::string::npos;
+        if (!too_large || attempt_chunks.size() <= 1) break;
+        const size_t keep = std::max<size_t>(1, attempt_chunks.size() / 2);
+        log_warn("draft request exceeded the context window - retrying with " +
+                 std::to_string(keep) + " chunk(s)");
+        attempt_chunks.resize(keep);
+    }
+    const std::string user_msg = build_user_msg(attempt_chunks);
+    // A draft that hit num_predict (done_reason=length) is regenerated once
+    // with the largest budget the remaining num_ctx allows. A continuation
+    // append duplicated the answer (the model restarted instead of resuming),
+    // so a clean second generation is used instead.
+    if (!draft.empty() && draft_timing.done_reason == "length") {
+        log_warn("draft hit num_predict (done_reason=length) - regenerating once");
+        ChatOptions retry_opts = draft_opts;
+        const long long room =
+            static_cast<long long>(cfg_.num_ctx) - draft_timing.prompt_tokens - 150;
+        retry_opts.num_predict = static_cast<int>(
+            std::max<long long>(300, std::min<long long>(850, room)));
+        StageTimer t_regen;
+        ChatTiming regen_timing;
+        // Not streamed: the first (truncated) attempt is already on screen and
+        // the UI replaces it with the final answer on the done event.
+        std::string again =
+            ollama_.chat(chat_model_, messages, retry_opts, &derr, &regen_timing);
+        log_model_call("draft_regen", chat_model_,
+                       static_cast<long long>(t_regen.ms()), regen_timing.load_ms,
+                       regen_timing.prompt_eval_ms, regen_timing.eval_ms,
+                       regen_timing.prompt_tokens, regen_timing.eval_tokens,
+                       regen_timing.done_reason);
+        log_info("draft_regen: budget=" + std::to_string(retry_opts.num_predict) +
+                 " done_reason=" +
+                 (regen_timing.done_reason.empty() ? std::string("?")
+                                                    : regen_timing.done_reason));
+        if (!again.empty()) {
+            draft = again;
+            draft_timing = regen_timing;
+        }
+    }
+    // Last resort: never leave a mid-word or unfinished [Mənbə label. Cutting
+    // back to the last complete sentence is better than a half citation.
+    if (!draft.empty() &&
+        (draft_timing.done_reason == "length" || has_dangling_source_label(draft))) {
+        const std::string trimmed =
+            trim_to_last_sentence(strip_dangling_source_label(draft));
+        if (!trimmed.empty() && trimmed.size() >= 40) {
+            log_warn("draft still truncated - cut back to the last complete sentence (" +
+                     std::to_string(draft.size()) + " -> " + std::to_string(trimmed.size()) +
+                     " chars)");
+            draft = trimmed;
+        }
     }
     const double ms_draft = t_draft.ms();
-    log_model_call("draft", chat_model_, static_cast<long long>(ms_draft),
-                   draft_timing.load_ms, draft_timing.prompt_eval_ms,
-                   draft_timing.eval_ms, draft_timing.prompt_tokens,
-                   draft_timing.eval_tokens);
     // Test instrument (DUMY_DUMP_TOPK=1): prompt_eval_count of the draft call
     // next to the context knobs, so "prompt fits in num_ctx" is checkable.
     if (std::getenv("DUMY_DUMP_TOPK") != nullptr) {
@@ -665,14 +1216,14 @@ AnswerResult RagPipeline::answer(const std::string& question,
                       : "0"));
     }
     if (draft.empty()) {
-        res.warning = "llm_failed: " + derr;
+        // Never show raw HTTP/JSON/token counts to the user; the detail is
+        // logged for diagnosis and a clean Azerbaijani message is returned.
+        log_error("draft failed: " + derr);
+        res.warning = "llm_failed";
         res.answer =
-            "Cavabı hazırlayarkən xəta baş verdi: " + derr +
-            (derr.find("model") != std::string::npos
-                 ? "\nModel adını config.json-dan yoxlayın və ya 'ollama pull " +
-                       chat_model_ + "' əmrini çalışdırın."
-                 : std::string());
-        log_error(res.warning);
+            "Cavabı hazırlaya bilmədəm. Zəhmət olmasa sualı bir az qısaldın və ya "
+            "yenidən cəhd edin.";
+        if (on_delta) on_delta(res.answer);
         return res;
     }
 
@@ -689,11 +1240,8 @@ AnswerResult RagPipeline::answer(const std::string& question,
     StageTimer t_check;
     if (needs_self_check) {
         if (on_status) on_status("selfcheck");  // kept internal (not displayed)
-        ChatOptions check_opts;
-        check_opts.temperature = 0.0;
-        check_opts.num_ctx = cfg_.num_ctx;  // same ctx as draft -> no model reload
-        check_opts.num_predict = 256;       // compact verdict only
-        check_opts.keep_alive = cfg_.keep_alive;
+        // Same ctx/keep_alive as the draft -> no model reload for the verdict.
+        ChatOptions check_opts = cfg_.chat_options(256, 0.0);
         std::string cerr;
         ChatTiming check_timing;
         StageTimer t_check_call;
@@ -755,7 +1303,8 @@ AnswerResult RagPipeline::answer(const std::string& question,
             log_model_call("draft_retry", chat_model_,
                            static_cast<long long>(t_fix.ms()), fix_timing.load_ms,
                            fix_timing.prompt_eval_ms, fix_timing.eval_ms,
-                           fix_timing.prompt_tokens, fix_timing.eval_tokens);
+                           fix_timing.prompt_tokens, fix_timing.eval_tokens,
+                           fix_timing.done_reason);
             if (fixed.empty()) {
                 log_warn("self-check retry failed, keeping draft: " + ferr);
             } else {
@@ -779,7 +1328,8 @@ AnswerResult RagPipeline::answer(const std::string& question,
     const double ms_check = t_check.ms();
     StageTimer t_post;
     final_answer = validate_source_labels(
-        fix_url_labels(strip_summary_labels(OllamaClient::strip_thinking(final_answer))),
+        strip_dangling_source_label(strip_clarification_offer(fix_url_labels(
+            strip_summary_labels(OllamaClient::strip_thinking(final_answer))))),
         selected);
 
     // --- 8. strip model-written source list, add notes + safety warning ----
@@ -788,15 +1338,78 @@ AnswerResult RagPipeline::answer(const std::string& question,
     // Remove a model-written source list, any echoed silent-check block, and
     // every copy of the safety line (it is appended back exactly once, at the
     // very end, only when the question concerns health/diagnosis/treatment).
-    final_answer =
-        strip_silent_check(strip_safety_line(strip_own_sources(final_answer)));
+    final_answer = strip_trailing_source_lines(
+        strip_silent_check(strip_safety_line(strip_own_sources(final_answer))));
+    // --- 7b. answer-quality gate ------------------------------------------
+    // Never return an empty answer, a bare clarification offer, a generation
+    // loop or (for a general question) an answer that drifted into the
+    // agriculture domain. One strict retry, then an honest failure.
+    const bool degenerate = is_degenerate_answer(final_answer);
+    const bool repetitive = has_repetition_loop(final_answer);
+    const bool off_domain = pdf_relevance_failed &&
+                            answer_uses_domain_markers(final_answer) &&
+                            !answer_uses_domain_markers(q);
+    const bool too_short =
+        cfg_.quality_check_enabled && !degenerate &&
+        final_answer.size() <
+            static_cast<size_t>(std::max(0, cfg_.quality_min_answer_chars));
+    if (degenerate || too_short || repetitive || off_domain) {
+        log_warn(std::string("quality gate: ") +
+                 (degenerate ? "degenerate" : repetitive ? "repetitive"
+                               : off_domain ? "off-domain" : "short") +
+                 " answer (" + std::to_string(final_answer.size()) + " chars) - strict retry");
+        std::string serr;
+        ChatTiming stiming;
+        StageTimer t_strict;
+        std::string retry = ollama_.chat(
+            chat_model_, {{"user", build_strict_answer_message(q)}},
+            cfg_.chat_options(std::min(cfg_.num_predict_draft, 400), 0.0), &serr, &stiming);
+        log_model_call("strict_retry", chat_model_,
+                       static_cast<long long>(t_strict.ms()), stiming.load_ms,
+                       stiming.prompt_eval_ms, stiming.eval_ms,
+                       stiming.prompt_tokens, stiming.eval_tokens, stiming.done_reason);
+        retry = trim(strip_dangling_source_label(strip_clarification_offer(
+            strip_silent_check(strip_safety_line(strip_own_sources(
+                OllamaClient::strip_thinking(retry)))))));
+        const bool retry_ok = !retry.empty() && !is_degenerate_answer(retry) &&
+                              !has_repetition_loop(retry) &&
+                              (!off_domain || !answer_uses_domain_markers(retry)) &&
+                              (degenerate || retry.size() > final_answer.size());
+        if (retry_ok) {
+            final_answer = retry;
+            log_info("quality gate: strict retry accepted (" +
+                     std::to_string(final_answer.size()) + " chars)");
+        } else if (degenerate || repetitive || off_domain) {
+            final_answer = HONEST_FAILURE_MESSAGE;
+            log_warn("quality gate: strict retry failed - honest failure message");
+        } else {
+            log_warn("quality gate: strict retry not better - keeping short draft");
+        }
+    }
+    if (trim(final_answer).empty()) {
+        final_answer = HONEST_FAILURE_MESSAGE;
+        log_warn("quality gate: answer still empty - honest failure message");
+    }
+    if (requested_sentences > 0) {
+        const std::string limited = limit_sentences(final_answer, requested_sentences);
+        if (limited != final_answer) {
+            log_info("answer limited to " + std::to_string(requested_sentences) +
+                     " sentence(s) as requested");
+            final_answer = limited;
+        }
+    }
+    if (selected.empty() && requested_sentences == 0 &&
+        cfg_.max_general_sentences > 0) {
+        final_answer = limit_sentences(final_answer, cfg_.max_general_sentences);
+    }
     res.used_chunks = cited_chunks(final_answer, selected);
 
     std::string out = final_answer;
     if (selected.empty()) {
         res.from_own_knowledge = true;
         out += "\n\n";
-        out += NO_CONTEXT_NOTE;
+        out += pdf_relevance_failed ? std::string(NO_RELEVANT_CONTEXT_NOTE)
+                                    : no_context_note(web_enabled || res.used_web);
     }
     // The web-failure note goes before the safety line so the safety line is
     // always the very last thing in the answer.
@@ -821,6 +1434,7 @@ AnswerResult RagPipeline::answer(const std::string& question,
              ", draft=" + std::to_string((int)ms_draft) +
              ", self_check=" + std::to_string((int)ms_check) +
              ", post=" + std::to_string((int)ms_post) +
+             ", path=" + (fast_path ? "fast" : "full") +
              ", TOTAL=" + std::to_string((int)ms_total));
 
     // --- 9. remember the turn for follow-up questions ----------------------
@@ -829,3 +1443,5 @@ AnswerResult RagPipeline::answer(const std::string& question,
 }
 
 }  // namespace dumy
+
+

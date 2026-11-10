@@ -1,6 +1,7 @@
 #include "dumy/config.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <exception>
 
 namespace dumy {
@@ -136,6 +137,25 @@ Config Config::load(const std::string& path, std::string* err) {
         read_if(exp, "max_simple_words", c.expansion_max_simple_words);
     }
 
+    read_if(j, "token_chars_per_token", c.token_chars_per_token);
+    read_if(j, "context_safety_margin", c.context_safety_margin);
+    read_if(j, "api_key", c.api_key);
+    // A key in the environment wins over config.json so a tunnel deployment
+    // never needs the secret written into a tracked file.
+    if (const char* env_key = std::getenv("DUMY_API_KEY")) {
+        if (*env_key) c.api_key = env_key;
+    }
+    read_if(j, "allowed_origins", c.allowed_origins);
+    read_if(j, "rate_limit_per_minute", c.rate_limit_per_minute);
+    read_if(j, "max_question_chars", c.max_question_chars);
+    read_if(j, "max_body_kb", c.max_body_kb);
+    read_if(j, "log_questions", c.log_questions);
+    read_if(j, "web_engine", c.web_engine);
+    read_if(j, "web_kill_switch", c.web_kill_switch);
+    read_if(j, "web_search_timeout_sec", c.web_search_timeout_sec);
+    read_if(j, "web_memory_cache_minutes", c.web_memory_cache_minutes);
+    read_if(j, "max_general_sentences", c.max_general_sentences);
+
     // Sanity clamps so a hand-edited config cannot break retrieval.
     if (c.chunk_size < 100) c.chunk_size = 100;
     if (c.chunk_overlap < 0) c.chunk_overlap = 0;
@@ -188,6 +208,16 @@ Config Config::load(const std::string& path, std::string* err) {
     if (c.keyterm_prefix_length < 1) c.keyterm_prefix_length = 1;
     if (c.keyterm_prefix_length > 20) c.keyterm_prefix_length = 20;
     if (c.expansion_max_simple_words < 1) c.expansion_max_simple_words = 1;
+    if (c.token_chars_per_token < 1.8) c.token_chars_per_token = 1.8;
+    if (c.token_chars_per_token > 6.0) c.token_chars_per_token = 6.0;
+    if (c.context_safety_margin < 0) c.context_safety_margin = 0;
+    if (c.context_safety_margin > 4000) c.context_safety_margin = 4000;
+    if (c.max_question_chars < 50) c.max_question_chars = 50;
+    if (c.rate_limit_per_minute < 0) c.rate_limit_per_minute = 0;
+    if (c.max_body_kb < 8) c.max_body_kb = 8;
+    if (c.web_search_timeout_sec < 1) c.web_search_timeout_sec = 1;
+    if (c.web_memory_cache_minutes < 0) c.web_memory_cache_minutes = 0;
+    if (c.max_general_sentences < 1) c.max_general_sentences = 1;
 
     return c;
 }

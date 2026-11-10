@@ -1,4 +1,4 @@
-﻿build/
+build/
 *.log
 *.tmp
 *.bak
@@ -12,3 +12,6 @@ data_backup_*/
 test_results/
 benchmark/
 vcpkg_installed/
+# scratch / local test artefacts
+test_results/
+payloads*.json

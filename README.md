@@ -8,9 +8,9 @@ and farm management — plus brief general everyday questions ("Telefon nədir?"
   language when they write in something else.
 - **No API keys, no accounts, no cloud.** The only AI is a local Ollama server
   (`http://localhost:11434`).
-- **Internet search is ON by default** (key-free sources only: local SearXNG with
-  Wikipedia fallback). If the internet is down the bot keeps working with PDFs and its
-  own knowledge — and *tells* the user.
+- **Internet search is optional** (key-free: DuckDuckGo Lite + Wikipedia fallback;
+  `web_search_enabled` in `config.json`). If it is off or down the bot keeps working
+  with PDFs and its own knowledge — and *tells* the user.
 - **Politely refuses programming tasks** in Azerbaijani, stays helpful for everything else.
 - Ready to be connected to a website later: REST API + SSE streaming + CORS + sessions +
   thread safety.
@@ -85,13 +85,12 @@ powershell -File scripts\pull_models.ps1   # Windows
 ```
 which runs:
 ```bash
-ollama pull bge-m3          # embeddings (good Azerbaijani support)
-ollama pull qwen2.5:7b      # draft model (the main answer)
-ollama pull qwen2.5:3b      # helper: expansion, rerank, summaries, self-check
-ollama pull llama3.1:8b     # fallback_model
-# optional (benchmark / alternatives):
-ollama pull qwen3:8b        # draft candidate (use qwen3:14b if VRAM >= 16 GB)
-ollama pull qwen3:4b        # alternative small helper
+ollama pull bge-m3                        # embeddings, CPU only
+ollama pull gemma3:4b                     # draft + helper + self-check (single model)
+ollama pull qwen3:4b-instruct-2507-q4_K_M # fallback when gemma3:4b is missing
+# optional / experiments (one chat model at a time on 6 GB):
+ollama pull qwen3.5:4b
+ollama pull qwen2.5:7b
 ```
 If a configured model is missing the app falls back gracefully:
 `models.draft` → `fallback_model` → `model_fallbacks` → first installed model;
@@ -100,13 +99,13 @@ If a configured model is missing the app falls back gracefully:
 
 ### VRAM tips (RTX 4050, 6 GB)
 
-- Set environment variables (Windows: System Properties → Environment variables):
-  `OLLAMA_MAX_LOADED_MODELS=1` and `OLLAMA_FLASH_ATTENTION=1`
-  — one model in VRAM at a time = fewer reloads, less swapping.
-- `keep_alive: "30m"` keeps the draft model resident between questions.
+- `start_dumy.bat` sets `OLLAMA_MAX_LOADED_MODELS=2` (one chat model + bge-m3 on
+  CPU), `OLLAMA_KEEP_ALIVE=-1` and `OLLAMA_FLASH_ATTENTION=1`. Setting it to 1
+  evicts the chat model whenever bge-m3 is used and causes a reload per question.
+- `keep_alive: "-1"` keeps both models resident between questions.
 - Watch the GPU/CPU split with `ollama ps` while a question is generating.
-- Helper work (expansion, rerank, summaries, self-check) runs on the small
-  model; the big model is called exactly once per question (the draft).
+- gemma3:4b is the only chat model: draft, helper (expansion/rerank/summary) and
+  self-check all use it, so no second model ever needs to be loaded.
 
 ## 3. Build & run
 
@@ -159,11 +158,11 @@ Other flags: `--config <path>`, `--port <n>`, `--chat-model <name>`, `--no-web`,
 |---|---|---|
 | `ollama_url` | `http://localhost:11434` | local Ollama |
 | `models.embed` | `bge-m3` | embeddings |
-| `models.helper` | `qwen2.5:3b` | expansion / rerank / map-reduce summaries |
-| `models.draft` | `qwen2.5:7b` | the main answer model |
-| `models.selfcheck` | `qwen2.5:3b` | second-pass fact check (broad/diagnosis/comparison) |
-| `fallback_model` | `llama3.1:8b` | used when `models.draft` isn't installed |
-| `model_fallbacks` | `llama3.1:8b`, `qwen3:8b`, `qwen2.5:7b` | further draft fallbacks |
+| `models.helper` | `gemma3:4b` | expansion / rerank / map-reduce summaries |
+| `models.draft` | `gemma3:4b` | the main answer model |
+| `models.selfcheck` | `gemma3:4b` | second-pass fact check (broad/diagnosis/comparison) |
+| `fallback_model` | `qwen3:4b-instruct-2507-q4_K_M` | used when `models.draft` isn't installed |
+| `model_fallbacks` | `qwen3:4b-instruct-2507-q4_K_M` | further draft fallbacks |
 | `chunk_size` | `650` | tokens per chunk (500–800 range) |
 | `chunk_overlap` | `100` | tokens of overlap |
 | `top_k_simple` | `6` | chunks for simple questions |
@@ -172,8 +171,8 @@ Other flags: `--config <path>`, `--port <n>`, `--chat-model <name>`, `--no-web`,
 | `pdf_extra_folders` | `[]` | extra folders scanned at top level (legacy) |
 | `data_folder` | `data` | index + caches |
 | `host` / `port` | `127.0.0.1` / `8085` | REST server |
-| `web_search_enabled` | `true` | **always on by default** |
-| `searxng_url` | `http://localhost:8080` | local SearXNG |
+| `web_search_enabled` | `false` | enabled only after the fail-fast check passes |
+| `searxng_url` | `http://localhost:8080` | legacy SearXNG (optional) |
 | `search_languages` | `["az","en"]` | search in both, answer in Azerbaijani |
 | `web_top_results` / `web_max_pages` | `8` / `6` | search + download limits |
 | `web_fetch_timeout` | `10` | seconds per page |
@@ -183,10 +182,10 @@ Other flags: `--config <path>`, `--port <n>`, `--chat-model <name>`, `--no-web`,
 | `request_timeout` | `300` | seconds per Ollama call |
 | `max_history_messages` | `8` | remembered per session |
 | `rerank_top_n` | `8` | chunks kept after reranking |
-| `context_budget_tokens` | `5892` | above this → map-reduce. Arithmetic: `num_ctx` 8192 − 900 (system prompt + context scaffolding) − 600 (history) − 800 (`num_predict_draft`) = **5892**. `0` = recompute automatically. |
-| `num_ctx` | `8192` | Ollama context window (6 GB VRAM friendly) |
-| `num_predict_draft` | `1000` | cap on answer length (tokens). Measured: Cow №024 and the 5-question batch peak at 799–815 generated tokens, so 1000 leaves headroom while 800 was truncated |
-| `keep_alive` | `"30m"` | how long Ollama keeps models loaded (big speed win) |
+| `context_budget_tokens` | `0` | `0` = auto: `num_ctx` − real system prompt − history − `num_predict_draft` − safety margin. Above the map-reduce threshold, long contexts are summarized. |
+| `num_ctx` | `4096` | Ollama context window (6 GB VRAM friendly) |
+| `num_predict_draft` | `500` | cap on answer length (tokens); one regeneration with a larger budget if the model hits it |
+| `keep_alive` | `"-1"` | Ollama never unloads the model |
 | `auto_ingest` | `true` | index new PDFs at startup |
 | `ocr_enabled` / `ocr_languages` | `false` / `aze+eng` | OCR extension point (Tesseract, not built in v1) |
 | `web_folder` | `web` | chat UI files (falls back to the copy embedded in the binary) |
@@ -321,8 +320,8 @@ size limited by `upload_max_mb`, and by default only localhost may upload
 
 ### `GET /health`
 ```json
-{"status":"ok","ollama":true,"chat_model":"qwen2.5:7b","helper_model":"qwen2.5:3b",
- "embedding_model":"bge-m3","web_search_enabled":true,"sessions":0,"chunks":6751,
+{"status":"ok","ollama":true,"chat_model":"gemma3:4b","helper_model":"gemma3:4b",
+ "embedding_model":"bge-m3","web_search_enabled":false,"sessions":0,"chunks":6751,
  "pdf_support":true}
 ```
 A live Ollama probe with a hard 2 s timeout (cached 5 s) backs the `ollama`
@@ -368,7 +367,7 @@ the answer still comes from PDFs + model knowledge, with an explicit note:
 
 Run them in console mode (`dumy --console`) or via `POST /chat`.
 
-### Measured results on this machine (RTX 4050 6 GB, qwen2.5:7b draft)
+### Historical measurements (RTX 4050 6 GB, qwen2.5:7b — superseded by gemma3:4b)
 
 | Test | Question | Time | Result |
 |---|---|---|---|
