@@ -5,9 +5,12 @@
 #pragma once
 
 #include <functional>
+#include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
+#include "dumy/az_quality.h"
 #include "dumy/bm25_index.h"
 #include "dumy/config.h"
 #include "dumy/ollama_client.h"
@@ -103,6 +106,15 @@ private:
     // near-duplicate embeddings (cosine > 0.95) so the same text is never
     // cited twice while keeping source diversity.
     std::vector<Chunk> diversify(const std::vector<Chunk>& chunks) const;
+
+    // Word-validity guard: one vocabulary built from the indexed chunks, so a
+    // garbled 4B answer (non-words) can be detected and retried.
+    void ensure_vocabulary() const;
+    AzWordStats unknown_word_stats(const std::string& text) const;
+
+    mutable std::unordered_set<std::string> vocab_;
+    mutable std::unordered_set<std::string> vocab_prefixes_;
+    mutable std::once_flag vocab_once_;
 
     const Config& cfg_;
     OllamaClient& ollama_;

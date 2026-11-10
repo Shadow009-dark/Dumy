@@ -52,6 +52,12 @@
     "http://127.0.0.1:8085"
   ],
   "rate_limit_per_minute": 20,
+  "rate_limit_exempt_loopback": true,
+  "rate_limit_localhost_per_minute": 0,
+  "fact_check_enabled": true,
+  "fact_check_num_predict": 160,
+  "garbled_word_ratio_max": 0.12,
+  "garbled_word_min_words": 10,
   "max_question_chars": 2000,
   "max_body_kb": 256,
   "log_questions": false,
@@ -83,7 +89,7 @@
   "ocr_languages": "aze+eng",
   "creator": "DUMY Team",
   "generation": {
-    "temperature": 0.15,
+    "temperature": 0.25,
     "top_p": 0.9,
     "repeat_penalty": 1.1,
     "response_language": "az"
@@ -182,7 +188,7 @@
     "onun"
   ],
   "quality_check": {
-    "min_answer_chars": 80,
+    "min_answer_chars": 40,
     "enabled": true
   },
   "keyterm_relevance": {

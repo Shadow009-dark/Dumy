@@ -565,10 +565,11 @@ inline bool is_identity_question(const std::string& question) {
     const std::string q = " " + to_lower_utf8(question) + " ";
     static const char* kw[] = {
         "adın nədir", "adın neadir", "sənin adın", "senin adin", "who are you",
-        "səni kim yaradıb", "seni kim yaradib", "kim yaradıb", "kim yaratdı",
-        "who created", "who made", "yaradıcı", "yaratdıcı", "developer",
-        "hazırlayan", "hazırlayan kim", "what is your name", "your name",
-        "adın nədir və", "sənin adın nədir", "kim yaradıb sizi"
+        "səni kim yaradıb", "seni kim yaradib", "sizi kim yaradıb",
+        "kim yaratdı", "who created you", "who made you",
+        "sənin yaradıcın", "senin yaradicin", "yaradıcın kimdir",
+        "yaradicin kimdir", "hazırlayan kim", "what is your name", "your name",
+        "adın nədir və", "sənin adın nədir"
     };
     if (meaningful_word_count(question) > 12) return false;
     for (const char* k : kw) {
@@ -877,8 +878,25 @@ inline size_t count_arith_numbers(const std::string& s) {
 
 // Azerbaijani operation words (folded: vurulsun->vurulsun, böl->bol,
 // çıx->cix, əlavə->elave). Also true for + - * / × ÷.
+// "15 x 12" uses the letter x as a multiplication sign. Only a standalone
+// x between two digits counts, so words like "xeyli" do not match.
+inline bool has_letter_times(const std::string& question) {
+    std::string s;
+    for (char c : question)
+        if (!std::isspace(static_cast<unsigned char>(c))) s.push_back(c);
+    for (size_t i = 1; i + 1 < s.size(); ++i) {
+        const char c = s[i];
+        if ((c == 'x' || c == 'X') &&
+            std::isdigit(static_cast<unsigned char>(s[i - 1])) &&
+            std::isdigit(static_cast<unsigned char>(s[i + 1])))
+            return true;
+    }
+    return false;
+}
+
 inline bool has_arithmetic_operator(const std::string& question) {
     const std::string q = to_lower_utf8(question);
+    if (has_letter_times(question)) return true;
     if (q.find('+') != std::string::npos || q.find('*') != std::string::npos ||
         q.find('/') != std::string::npos || q.find("\xC3\x97") != std::string::npos ||
         q.find("\xC3\xB7") != std::string::npos)
@@ -912,7 +930,8 @@ inline std::string az_arithmetic_expression(const std::string& question) {
 
     const std::string f = az_fold(question);
     char op = 0;
-    if (f.find("vur") != std::string::npos) op = '*';
+    if (has_letter_times(question)) op = '*';
+    else if (f.find("vur") != std::string::npos) op = '*';
     else if (f.find("bol") != std::string::npos) op = '/';
     else if (f.find("topla") != std::string::npos || f.find("elave et") != std::string::npos)
         op = '+';
@@ -955,7 +974,8 @@ inline bool is_arithmetic_question(const std::string& question) {
     if (!has_digit) return false;
 
     const std::string q = to_lower_utf8(question);
-    bool op = q.find('+') != std::string::npos || q.find('*') != std::string::npos ||
+    bool op = has_letter_times(question) ||
+              q.find('+') != std::string::npos || q.find('*') != std::string::npos ||
               q.find('/') != std::string::npos || q.find("\xC3\x97") != std::string::npos ||
               q.find("\xC3\xB7") != std::string::npos;
     if (!op) {
@@ -970,7 +990,9 @@ inline bool is_arithmetic_question(const std::string& question) {
     // Word form: "15 vurulsun 12", "20-dən 5 çıx" - operator word + 2 numbers.
     // A measure/dose question ("gündə 2 dəfə 5 kq yem") is NOT a computation,
     // so units reject the word-operator branch.
-    if (count_arith_numbers(question) >= 1 && has_arithmetic_operator(question) &&
+    // Two operands are required: "Pişiklər 100 səs çıxara bilir" contains the
+    // verb "çıxara" (produce) and one number - it is a statement, not a sum.
+    if (count_arith_numbers(question) >= 2 && has_arithmetic_operator(question) &&
         meaningful_word_count(question) <= 10) {
         static const char* units[] = {"kq", "kg", "qram", "litr", "ml", "ton",
                                       "hektar", "gun", "gunde", "doza", "faiz",
@@ -1021,6 +1043,70 @@ inline const char* HONEST_FAILURE_MESSAGE =
     "Bu sual üzrə cavab yarada bilmədim. Zəhmət olmasa sualı fərqli sözlərlə "
     "və ya daha dəqiq yazın.";
 
+// Off-domain topics where a 4B model invents content: recipes, step-by-step
+// procedures, grammar-rule lists. An honest short refusal beats a confident
+// hallucination, and the deterministic fast paths are not affected.
+inline const char* OUT_OF_SCOPE_MESSAGE =
+    "Bu mövzuda dəqiq məlumatım yoxdur. Mən aqronomiya, maldarlıq və baytarlıq "
+    "üzrə ixtisaslaşmışam; resept, addım-addım təlimat və qrammatika qaydaları "
+    "kimi mövzularda etibarlı cavab verə bilmirəm.";
+
+inline const char* GARBLED_FALLBACK_MESSAGE =
+    "Dəqiq cavab verə bilmədim: modelin cavabı etibarsız (qarışıq sözlərlə) "
+    "göründü. Zəhmət olmasa sualı qısa və konkret yazın.";
+
+// Fact-check mode for declarative statements ("Title: fact"). Asking for a
+// verdict as the FIRST word is what keeps the answer from echoing the input.
+inline std::string build_fact_check_user_message(const std::string& statement) {
+    return "Sən Azərbaycan dilində fakt yoxlayıcısısan. Aşağıdakı İDDİANI yoxla.\n"
+           "CAVAB FORMATI (dəqiq):\n"
+           "<VERDICT>. <1-2 qısa cümlə izah>\n"
+           "VERDICT yalnız bunlardan biri ola bilər: Doğrudur. / Qismən doğrudur. "
+           "/ Səhvdir. / Dəqiq bilmirəm.\n"
+           "QAYDALAR:\n"
+           "- İddianı TƏKRARLAMA, onu sitat kimi yazma; birbaşa verdiktlə başla.\n"
+           "- Əmin deyilsənsə yalnız \"Dəqiq bilmirəm.\" yaz və bir səbəb göstər.\n"
+           "- Əmin olduğun cavabda \"dəqiq məlumatım yoxdur\" kimi ifadə İŞLƏTMƏ.\n"
+           "- Heç bir mənbə etiketi ([Mənbə: ...], [İnternet: ...]) və PDF adı yazma.\n"
+           "- Cavab 3 qısa cümlədən çox olmasın.\n"
+           "- İddiadakı rəqəmi yoxla; rəqəmi dəyişdirmə.\n\n"
+           "İDDİA: " + statement + "\n\nCAVAB:";
+}
+
+// Second, adversarial pass: look for the error first. Agreement between the
+// neutral and adversarial verdicts is required before a confident answer is
+// returned; disagreement becomes "Dəqiq bilmirəm.".
+inline std::string build_fact_check_refute_message(const std::string& statement) {
+    return "Sən Azərbaycan dilində sərt fakt yoxlayıcısısan. Aşağıdakı İDDİADA "
+           "səhv olub-olmadığını yoxla.\n"
+           "CAVAB FORMATI (dəqiq): <VERDICT>. <1 qısa cümlə>\n"
+           "VERDICT yalnız: Doğrudur. / Qismən doğrudur. / Səhvdir. / Dəqiq bilmirəm.\n"
+           "QAYDALAR:\n"
+           "- Əvvəlcə iddianın səhv ola biləcəyi yeri axtar.\n"
+           "- Səhv tapmasan və iddia dəqiqdirsə Doğrudur yaz.\n"
+           "- Rəqəm, ad və ya tarix dəqiq deyilsə Səhvdir yaz.\n"
+           "- Əmin deyilsənsə yalnız \"Dəqiq bilmirəm.\" yaz.\n"
+           "- İddianı təkrarlama, mənbə etiketi yazma. 2 cümlədən çox yazma.\n\n"
+           "İDDİA: " + statement + "\n\nCAVAB:";
+}
+
+// Short direct answer for an off-domain general question (no retrieval).
+inline std::string build_general_fact_user_message(const std::string& question) {
+    // Do NOT name the artefacts that must be avoided: a 4B model copies those
+    // words back as a template (that produced literal "**PDF Adı:**" headers).
+    return "Sual: " + question + "\n\n"
+           "Yalnız bu sualın cavabını Azərbaycan dilində yaz. 1-2 qısa cümlə "
+           "kifayətdir. Başlıq, siyahı və giriş cümləsi yazma. Cavabı dəqiq "
+           "bilirsənsə birbaşa yaz. Üslub nümunəsi: \"Su 100°C-də qaynayır.\" "
+           "Yalnız həqiqətən bilmədikdə \"Bu mövzuda dəqiq məlumatım yoxdur.\" yaz.";
+}
+
+// Minimal retry prompt for a rejected off-domain answer: no rules that could
+// be copied back as a template.
+inline std::string build_plain_answer_message(const std::string& question) {
+    return "Sual: " + question + "\n\nQısa cavab:";
+}
+
 // A single strict retry when the draft was empty / only a clarification offer
 // / too short to be a real answer. Minimal prompt: no context, no rules that
 // invite an offer.
@@ -1065,20 +1151,8 @@ inline std::string strip_trailing_source_lines(std::string s) {
     }
 }
 
-// Cuts the text back to its last complete sentence (used only when a draft
-// still hit num_predict after the continuation attempts, so the user never
-// sees a mid-word / "[M" ending).
-inline std::string trim_to_last_sentence(const std::string& text) {
-    for (size_t i = text.size(); i > 0; --i) {
-        const char c = text[i - 1];
-        if (c != '.' && c != '!' && c != '?') continue;
-        if (i < text.size() && text[i] != ' ' && text[i] != '\n' && text[i] != '\r')
-            continue;  // decimal point inside a number
-        return trim(text.substr(0, i));
-    }
-    return text;
-}
-
+// trim_to_last_sentence() lives in az_quality.h (used by both the fact-check
+// shaping and the draft truncation guard).
 inline std::string strip_dangling_source_label(std::string s) {
     while (has_dangling_source_label(s)) {
         s.erase(s.rfind('['));

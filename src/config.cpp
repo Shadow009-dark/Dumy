@@ -147,6 +147,12 @@ Config Config::load(const std::string& path, std::string* err) {
     }
     read_if(j, "allowed_origins", c.allowed_origins);
     read_if(j, "rate_limit_per_minute", c.rate_limit_per_minute);
+    read_if(j, "rate_limit_exempt_loopback", c.rate_limit_exempt_loopback);
+    read_if(j, "rate_limit_localhost_per_minute", c.rate_limit_localhost_per_minute);
+    read_if(j, "fact_check_enabled", c.fact_check_enabled);
+    read_if(j, "fact_check_num_predict", c.fact_check_num_predict);
+    read_if(j, "garbled_word_ratio_max", c.garbled_word_ratio_max);
+    read_if(j, "garbled_word_min_words", c.garbled_word_min_words);
     read_if(j, "max_question_chars", c.max_question_chars);
     read_if(j, "max_body_kb", c.max_body_kb);
     read_if(j, "log_questions", c.log_questions);
@@ -214,6 +220,12 @@ Config Config::load(const std::string& path, std::string* err) {
     if (c.context_safety_margin > 4000) c.context_safety_margin = 4000;
     if (c.max_question_chars < 50) c.max_question_chars = 50;
     if (c.rate_limit_per_minute < 0) c.rate_limit_per_minute = 0;
+    if (c.rate_limit_localhost_per_minute < 0) c.rate_limit_localhost_per_minute = 0;
+    if (c.fact_check_num_predict < 80) c.fact_check_num_predict = 80;
+    if (c.fact_check_num_predict > 400) c.fact_check_num_predict = 400;
+    if (c.garbled_word_ratio_max < 0.02) c.garbled_word_ratio_max = 0.02;
+    if (c.garbled_word_ratio_max > 0.6) c.garbled_word_ratio_max = 0.6;
+    if (c.garbled_word_min_words < 3) c.garbled_word_min_words = 3;
     if (c.max_body_kb < 8) c.max_body_kb = 8;
     if (c.web_search_timeout_sec < 1) c.web_search_timeout_sec = 1;
     if (c.web_memory_cache_minutes < 0) c.web_memory_cache_minutes = 0;
@@ -280,6 +292,12 @@ nlohmann::json Config::to_json() const {
             {"repeat_penalty", repeat_penalty},
             {"response_language", response_language}
         }},
+        {"fact_check_enabled", fact_check_enabled},
+        {"fact_check_num_predict", fact_check_num_predict},
+        {"garbled_word_ratio_max", garbled_word_ratio_max},
+        {"garbled_word_min_words", garbled_word_min_words},
+        {"rate_limit_exempt_loopback", rate_limit_exempt_loopback},
+        {"rate_limit_localhost_per_minute", rate_limit_localhost_per_minute},
         {"diagnosis_keywords", diagnosis_keywords},
         {"stopwords", stopwords},
         {"quality_check", {
@@ -303,6 +321,8 @@ nlohmann::json Config::to_json() const {
 ChatOptions Config::chat_options(int num_predict, double temperature) const {
     ChatOptions o;
     o.temperature = temperature;
+    o.top_p = top_p;
+    o.repeat_penalty = repeat_penalty;
     o.num_predict = num_predict;
     o.num_ctx = num_ctx;
     o.num_gpu = -1;             // GPU / partial offload: Ollama's default

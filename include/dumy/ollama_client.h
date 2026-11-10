@@ -18,6 +18,8 @@ struct ChatMessage {
 
 struct ChatOptions {
     double temperature = 0.2;
+    double top_p = 0.9;          // nucleus sampling (sent to Ollama)
+    double repeat_penalty = 1.1; // repetition penalty (sent to Ollama)
     int num_predict = -1;   // max new tokens; -1 = model default
     int num_ctx = 8192;
     int num_gpu = -1;       // -1 = model default; 0 = force CPU (embeddings)

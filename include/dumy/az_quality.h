@@ -8,9 +8,11 @@
 #include <cmath>
 #include <iomanip>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "dumy/common.h"
@@ -221,10 +223,12 @@ inline bool has_repetition_loop(const std::string& text) {
                               words[i + 3];
         if (++grams[g] >= 3) return true;
     }
-    // One long word repeated more than four times.
+    // One long word repeated many times. The threshold used to be 5, which
+    // flagged legitimate veterinary answers ("mastit" 5x in 900 chars) and
+    // forced a needless strict retry.
     std::unordered_map<std::string, int> counts;
     for (const auto& w : words)
-        if (w.size() >= 5 && ++counts[w] > 4) return true;
+        if (w.size() >= 6 && ++counts[w] >= 6) return true;
     // The same sentence twice.
     std::map<std::string, int> sentences;
     std::string cur;
@@ -267,6 +271,517 @@ inline std::string build_no_context_user_message(const std::string& question,
 
 inline const char* SHORT_NO_CONTEXT_NOTE =
     "Qeyd: cavab [Ümumi bilik] əsasında verilib; vacib qərarlar üçün mənbəni yoxlayın.";
+
+// ---------------------------------------------------------------------------
+// Domain / routing heuristics
+// ---------------------------------------------------------------------------
+// A PDF citation is only allowed for a livestock / agronomy / dairy /
+// veterinary topic. Every off-domain decision below starts from this check,
+// so a general question can never inherit an agriculture book as its source.
+inline bool has_agri_keyword(const std::string& text) {
+    const std::string f = " " + az_fold(text) + " ";
+    static const char* PHRASES[] = {
+        "mal qara", "kend teserrufat", "sut emal", "et istehsal",
+        "yumurta istehsal", "heyvan saglig", "bitki muhafize"
+    };
+    for (const char* p : PHRASES)
+        if (f.find(p) != std::string::npos) return true;
+
+    // Folded stems. Short stems (2-3 letters) only match the whole token so
+    // common unrelated words are not pulled into the domain.
+    static const char* STEMS[] = {
+        "heyvan", "heyvand", "maldar", "qaramal", "inek", "iney", "buzov",
+        "dana", "qoyun", "quzu", "qoc", "keci", "camis", "deve", "toyuq",
+        "cuce", "hindus", "ordek", "ariciliq", "ari", "bal", "petek", "mum",
+        "sud", "sut", "sagim", "sagma", "yem", "yemleme", "otlaq", "bicin",
+        "silos", "saman", "taxil", "bugda", "arpa", "qargidali", "cugundur",
+        "yonca", "kartof", "pomidor", "xiyar", "badimcan", "lahanay",
+        "pambiq", "uzum", "bag", "meyve", "terevez", "agac", "ting", "toxum",
+        "torpaq", "gubre", "suvarma", "ekin", "beceri", "seleksiya", "sort",
+        "mehsul", "fermer", "ferma", "baytar", "veterinariya", "agronom",
+        "agronomiya", "diaqnoz", "mualice", "xestelik", "vaksin", "derman",
+        "doza", "antibiot", "peyvend", "parazit", "kend", "teserrufat"
+    };
+    for (const auto& w : az_words(text)) {
+        for (const char* s : STEMS) {
+            const std::string stem(s);
+            if (w == stem) return true;
+            if (stem.size() >= 4 && w.rfind(stem, 0) == 0 &&
+                w.size() <= stem.size() + 7)
+                return true;
+            if (w.size() >= 4 && stem.rfind(w, 0) == 0 &&
+                stem.size() <= w.size() + 7)
+                return true;
+        }
+    }
+    return false;
+}
+
+// "Title: statement" - the manual-test format. A short title, a colon, then a
+// declarative sentence (no question mark).
+inline bool is_title_statement(const std::string& q) {
+    const size_t nl = q.find('\n');
+    const std::string first = trim(q.substr(0, nl == std::string::npos ? q.size() : nl));
+    if (first.find('?') != std::string::npos) return false;
+    const size_t colon = first.find(':');
+    if (colon == std::string::npos || colon < 2 || colon > 60) return false;
+    const std::string title = trim(first.substr(0, colon));
+    const std::string rest = trim(first.substr(colon + 1));
+    if (title.empty() || rest.size() < 12) return false;
+    if (title.find('.') != std::string::npos || title.find('!') != std::string::npos)
+        return false;
+    const auto tw = az_words(title);
+    if (tw.size() > 6) return false;
+    // A title is a label, not a whole clause: "İnəklərin dostluğu", not
+    // "Bilmək lazımdır ki". Short but complete statements ("Polşa: Polşanın
+    // paytaxtı Varşavadır.") end in a copula and are still statements.
+    const auto rw = az_words(rest);
+    if (rw.size() < 2) return false;
+    if (rw.size() < 4) {
+        const std::string last = az_fold(rw.back());
+        const bool copula = last.size() > 3 &&
+            (last.compare(last.size() - 3, 3, "dir") == 0 ||
+             last.compare(last.size() - 3, 3, "dur") == 0);
+        if (!copula) return false;
+    }
+    return true;
+}
+
+// A plain declarative sentence without a question mark ("Pingvinlər uça
+// bilmir, üzürlər"). Conservative: 7+ words, no question/imperative marker.
+inline bool is_declarative_statement(const std::string& q) {
+    if (q.find('?') != std::string::npos) return false;
+    if (q.find('\n') != std::string::npos) return false;
+    const auto words = az_words(q);
+    if (words.size() < 7 || words.size() > 60) return false;
+    const std::string f = " " + az_fold(q) + " ";
+    static const char* QW[] = {
+        " ne ", " nece ", " niye ", " nedir ", " hansi ", " harada ",
+        " harda ", " kim ", " ne vaxt ", " ne zaman ", " ne qeder ",
+        " ne ucun ", " neler ", " nelerdir ", " hansilari ", " izah et",
+        " yaz ", " goster ", " hesabla ", " soyle ", " etmeli ", " lazimdir ",
+        " lazim ", " olar ", " olarmi ", " mumkundur ", " qaydasi "
+    };
+    for (const char* w : QW)
+        if (f.find(w) != std::string::npos) return false;
+    static const char* IMP[] = {"yaz", "izah", "goster", "hesabla", "tap",
+                               "soyle", "de", "ver", "et", "qur", "duzelt",
+                               "tercume", "qeyd", "yoxla"};
+    if (!words.empty())
+        for (const char* im : IMP)
+            if (words.front() == im) return false;
+    return true;
+}
+
+inline bool is_statement_input(const std::string& q) {
+    return is_title_statement(q) || is_declarative_statement(q);
+}
+
+// Grammar topics: the agriculture PDFs are not a source for them, and a 4B
+// model invents these lists, so they get an honest "no exact information".
+inline bool is_grammar_topic(const std::string& q) {
+    const std::string f = " " + az_fold(q) + " ";
+    static const char* KW[] = {
+        " qosma ", " qosmalar ", " qosmalarin ", " evezlik ", " evezlikler ",
+        " feil ", " fel ", " isim ", " ismin ", " isimler ", " sifat ",
+        " zerf ", " sintaksis ", " sintaktik ", " morfologiya ", " qrammatika ",
+        " grammatika ", " sekilci ", " soz yaradiciligi ", " cumle uzvu ",
+        " sait ", " samit ", " ismin hallari ", " hallar ", " fel formalari ",
+        " felin ", " feiller ", " felin formalari "
+    };
+    for (const char* k : KW)
+        if (f.find(k) != std::string::npos) return true;
+    return false;
+}
+
+inline bool is_procedure_request(const std::string& q) {
+    const std::string f = az_fold(q);
+    static const char* KW[] = {
+        "nece bisir", "nece demle", "resept", "qaydasi", "qaydasini",
+        "hazirlanmasi", "hazirlanir", "hazirlamaq", "addimlar", "telimat",
+        "nece guclendir", "nece etmek olar", "nece etmeli", "nece secilir",
+        "nece qurulur", "nece duzeldilir", "nece temizlenir"
+    };
+    for (const char* k : KW)
+        if (f.find(k) != std::string::npos) return true;
+    return false;
+}
+
+inline bool is_list_question(const std::string& q) {
+    const std::string f = " " + az_fold(q) + " ";
+    static const char* KW[] = {" nelerdir ", " nelardir ", " hansilardir ",
+                               " siyahi ", " faydalari ", " xususiyyetleri ",
+                               " novleri ", " cesidleri ", " neler edir "};
+    for (const char* k : KW)
+        if (f.find(k) != std::string::npos) return true;
+    return false;
+}
+
+inline bool is_definition_question(const std::string& q) {
+    const std::string f = az_fold(q);
+    static const char* KW[] = {"nedir", "ne demekdir", "izah et", "izah ele",
+                               "menasi nedir", "what is", "kimdir"};
+    for (const char* k : KW)
+        if (f.find(k) != std::string::npos) return true;
+    return false;
+}
+
+inline bool is_simple_fact_question(const std::string& q) {
+    const std::string f = " " + az_fold(q) + " ";
+    static const char* KW[] = {" nece ", " ne qeder ", " harada ", " harda ",
+                               " hansi ", " ne vaxt ", " ne zaman ", " kim ",
+                               " necedir "};
+    for (const char* k : KW)
+        if (f.find(k) != std::string::npos) return true;
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Fact-check answer shaping
+// ---------------------------------------------------------------------------
+inline std::string strip_meta_labels(std::string s) {
+    static const char* MARKS[] = {"[Mənbə", "[Mənb", "[İnternet", "[Internet",
+                                  "[Ümumi bilik", "[Umumi bilik", "[Xülasə",
+                                  "[Xulasə", "[Xulase"};
+    for (;;) {
+        size_t best = std::string::npos;
+        for (const char* m : MARKS) {
+            const size_t p = s.find(m);
+            if (p != std::string::npos && (best == std::string::npos || p < best)) best = p;
+        }
+        if (best == std::string::npos) break;
+        const size_t close = s.find(']', best);
+        if (close == std::string::npos) { s.erase(best); break; }
+        s.erase(best, close - best + 1);
+    }
+    return trim(s);
+}
+
+// Remove leading "**PDF Adı:** ...", "**Giriş Sözü:** ..." style header lines
+// and unwrap a leading "**Cavab:**" label. The 4B model emits this template
+// when a prompt so much as mentions those words.
+inline std::string strip_meta_headers(std::string s) {
+    size_t pos = 0;
+    for (;;) {
+        if (pos >= s.size()) return "";
+        size_t eol = s.find('\n', pos);
+        if (eol == std::string::npos) eol = s.size();
+        const std::string line = trim(s.substr(pos, eol - pos));
+        if (line.empty()) { pos = eol + 1; continue; }
+        // A bare bold title line ("**Günəş Sistemindəki Planetlər**") or a
+        // markdown heading is a header, not content.
+        const bool bold_title =
+            line.size() > 4 && line.rfind("**", 0) == 0 &&
+            line.compare(line.size() - 2, 2, "**") == 0 &&
+            line.find(':', 2) == std::string::npos;
+        if (bold_title || line[0] == '#') { pos = eol + 1; continue; }
+        const size_t colon = line.find(':');
+        if (colon == std::string::npos || colon > 40) break;
+        std::string label = to_lower_utf8(line.substr(0, colon));
+        const std::string rest = trim(line.substr(colon + 1));
+        if (label.rfind("**", 0) == 0) label = label.substr(2);
+        const size_t close = label.find("**");
+        if (close != std::string::npos) label = label.substr(0, close);
+        label = trim(label);
+        const bool meta = label.find("pdf") != std::string::npos ||
+                          label.find("giris") != std::string::npos ||
+                          label.find("sual") != std::string::npos ||
+                          label.find("mənbə") != std::string::npos ||
+                          label.find("menbe") != std::string::npos ||
+                          label.find("cavab") != std::string::npos;
+        if (!meta) break;
+        if (label.find("cavab") != std::string::npos && !rest.empty()) {
+            s = rest + (eol < s.size() ? s.substr(eol) : std::string());
+            pos = 0;
+            continue;
+        }
+        pos = eol + 1;
+    }
+    return trim(s.substr(pos));
+}
+
+// "X neçə Y-dən ibarətdir?" is answered by the count alone. Models often add
+// an invented list after a colon ("8 planet: ... Zülal ..."), which then fails
+// the word check and turns a correct count into a refusal.
+inline std::string trim_count_answer(const std::string& question,
+                                     std::string answer) {
+    const std::string f = az_fold(question);
+    if (f.find("nece") == std::string::npos || f.find("ibaret") == std::string::npos)
+        return answer;
+    const size_t colon = answer.find(':');
+    const size_t digit = answer.find_first_of("0123456789");
+    if (colon != std::string::npos && digit != std::string::npos && digit < colon) {
+        answer = trim(answer.substr(0, colon));
+        if (!answer.empty() && answer.back() != '.') answer += ".";
+    }
+    return answer;
+}
+
+// A correct short answer followed by "Bu mövzuda dəqiq məlumatım yoxdur" is a
+// contradiction; keep the informative part.
+inline std::string drop_trailing_uncertainty(std::string s) {
+    const size_t p = s.find("Bu mövzuda dəqiq məlumatım yoxdur");
+    if (p != std::string::npos && p > 40) s = trim(s.substr(0, p));
+    return s;
+}
+
+inline std::string fc_first_sentence(const std::string& s) {
+    for (size_t i = 0; i < s.size(); ++i) {
+        const char c = s[i];
+        if (c != '.' && c != '!' && c != '?') continue;
+        if (i + 1 < s.size() && s[i + 1] != ' ' && s[i + 1] != '\n' && s[i + 1] != '\r')
+            continue;
+        return trim(s.substr(0, i + 1));
+    }
+    return trim(s);
+}
+
+inline int fc_sentence_count(const std::string& s) {
+    int n = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        const char c = s[i];
+        if (c != '.' && c != '!' && c != '?') continue;
+        if (i + 1 < s.size() && s[i + 1] != ' ' && s[i + 1] != '\n' && s[i + 1] != '\r')
+            continue;
+        ++n;
+    }
+    return n;
+}
+
+// Defined below; shape_fact_check_answer() uses it to cut a long explanation.
+inline std::string trim_to_last_sentence(const std::string& text);
+
+// Turns a raw model reply into "<verdict>. <up to two short sentences>".
+// Confident and uncertain statements can never appear together: any
+// uncertainty marker downgrades the verdict to "Dəqiq bilmirəm.".
+// Verdict class of an already-shaped fact-check answer (for the two-pass
+// agreement check).
+inline std::string fc_verdict(const std::string& answer) {
+    if (answer.rfind("Qismən", 0) == 0 || answer.rfind("Qismen", 0) == 0)
+        return "qismen";
+    if (answer.rfind("Doğrudur", 0) == 0 || answer.rfind("Dogrudur", 0) == 0)
+        return "dogru";
+    if (answer.rfind("Səhvdir", 0) == 0 || answer.rfind("Sehvdir", 0) == 0)
+        return "sehv";
+    return "bilmirem";
+}
+
+inline std::string shape_fact_check_answer(const std::string& raw_in,
+                                           const std::string& statement) {
+    std::string raw = strip_meta_labels(trim(raw_in));
+    if (raw.empty()) return "Dəqiq bilmirəm. Bu iddianı etibarla yoxlaya bilmirəm.";
+
+    struct Cand { const char* phrase; const char* canon; };
+    static const Cand CANDS[] = {
+        {"qismən doğrudur", "Qismən doğrudur."}, {"qismen dogrudur", "Qismən doğrudur."},
+        {"doğrudur", "Doğrudur."}, {"dogrudur", "Doğrudur."},
+        {"səhvdir", "Səhvdir."}, {"sehvdir", "Səhvdir."},
+        {"dəqiq bilmirəm", "Dəqiq bilmirəm."}, {"deqiq bilmirem", "Dəqiq bilmirəm."},
+        {"bilmirəm", "Dəqiq bilmirəm."}, {"bilmirem", "Dəqiq bilmirəm."}
+    };
+    const std::string low = to_lower_utf8(raw);
+    size_t best = std::string::npos;
+    size_t best_len = 0;
+    std::string verdict;
+    for (const auto& c : CANDS) {
+        const size_t p = low.find(c.phrase);
+        if (p == std::string::npos) continue;
+        if (best == std::string::npos || p < best) {
+            best = p;
+            best_len = std::string(c.phrase).size();
+            verdict = c.canon;
+        }
+    }
+
+    std::string expl;
+    if (best != std::string::npos) {
+        expl = trim(raw.substr(best + best_len));
+        // Drop a leading "...", ":", "-", "–" left after the verdict.
+        while (!expl.empty() && (expl[0] == '.' || expl[0] == ':' || expl[0] == '-' ||
+                                 expl[0] == '–' || expl[0] == ','))
+            expl = trim(expl.substr(1));
+    } else {
+        verdict = "Dəqiq bilmirəm.";
+        expl = "Bu iddianı etibarla yoxlaya bilmirəm.";
+    }
+
+    // Echo guard: a model that repeats the statement has not explained it.
+    if (!statement.empty() && !expl.empty()) {
+        const std::string fs = fc_first_sentence(expl);
+        const auto fw = az_words(fs);
+        const auto sw = az_words(statement);
+        std::set<std::string> st(sw.begin(), sw.end());
+        size_t hit = 0;
+        for (const auto& w : fw)
+            if (st.count(w)) ++hit;
+        if (fw.size() >= 4 && hit * 10 >= fw.size() * 6 && hit >= 3)
+            expl = trim(expl.substr(fs.size()));
+    }
+
+    // Uncertainty anywhere wins over a confident verdict.
+    const std::string low_ex = to_lower_utf8(expl);
+    static const char* UNCERTAIN[] = {
+        "dəqiq məlumatım yoxdur", "deqiq melumatim yoxdur", "əmin deyiləm",
+        "emin deyilem", "dəqiq bilmirəm", "deqiq bilmirem", "bilmirəm",
+        "bilmirem", "şübhə", "subhe", "əmin ola bilmərəm", "etibar edə bilmərəm"
+    };
+    if (verdict != "Dəqiq bilmirəm.") {
+        for (const char* u : UNCERTAIN) {
+            if (low_ex.find(u) == std::string::npos) continue;
+            verdict = "Dəqiq bilmirəm.";
+            const std::string fs = fc_first_sentence(expl);
+            expl = fs.empty() ? std::string("Bu iddianı etibarla yoxlaya bilmirəm.") : fs;
+            break;
+        }
+    }
+
+    if (verdict == "Dəqiq bilmirəm." && expl.empty())
+        expl = "Bu iddianı etibarla yoxlaya bilmirəm.";
+
+    // Verdict sentence + at most two explanation sentences (3 total).
+    std::string out = verdict;
+    if (!expl.empty()) {
+        const std::string first = fc_first_sentence(expl);
+        std::string rest = trim(expl.substr(first.size()));
+        const std::string second = fc_first_sentence(rest);
+        std::string body = first;
+        if (!second.empty()) body += " " + second;
+        if (body.size() > 320) body = trim_to_last_sentence(body);
+        if (!body.empty()) {
+            body = az_upper_first(body);
+            out += " " + body;
+        }
+    }
+    out = trim_to_last_sentence(out);
+    return out;
+}
+
+// Cuts back to the last complete sentence; if there is none, cuts at the last
+// whitespace (never mid-word) and marks the cut.
+inline std::string trim_to_last_sentence(const std::string& text) {
+    const std::string s = trim(text);
+    if (s.empty()) return s;
+    const char last = s.back();
+    if (last == '.' || last == '!' || last == '?' || last == ']' || last == ')' ||
+        last == '"' || last == '\'' || last == '…' || last == '»')
+        return s;
+    size_t cut = std::string::npos;
+    for (size_t i = s.size(); i > 0; --i) {
+        const char c = s[i - 1];
+        if (c != '.' && c != '!' && c != '?') continue;
+        if (i < s.size() && !std::isspace(static_cast<unsigned char>(s[i]))) continue;
+        cut = i;
+        break;
+    }
+    if (cut != std::string::npos && cut >= 20) return trim(s.substr(0, cut));
+    const size_t sp = s.find_last_of(" \n\t");
+    if (sp != std::string::npos && sp >= 20) return trim(s.substr(0, sp)) + "…";
+    return s;
+}
+
+// ---------------------------------------------------------------------------
+// Word validity (garbled-output guard)
+// ---------------------------------------------------------------------------
+// A token counts as known when it is in the PDF vocabulary, the Azerbaijani
+// dictionary, the common-word list, a plausible suffixed form of a known root,
+// or shares a 6-character prefix with a vocabulary word.
+inline const std::unordered_set<std::string>& az_common_words() {
+    static const std::unordered_set<std::string> w = {
+        "men", "sen", "biz", "siz", "onlar", "bunlar", "onun", "bunun", "bele",
+        "beli", "xeyr", "yox", "var", "yoxdur", "olur", "olan", "olaraq", "oldu",
+        "olacaq", "olmalidir", "olmali", "edir", "edilir", "edilmis", "etmek",
+        "etmeli", "ederek", "eder", "ederken", "lazim", "lazimdir", "kimi", "gore",
+        "sonra", "evvel", "indi", "hem", "amma", "ancaq", "lakin", "cunki", "ile",
+        "ucun", "daha", "cox", "az", "en", "her", "bir", "iki", "uc", "dord",
+        "bes", "alti", "yeddi", "sekkiz", "doqquz", "on", "yuz", "min", "milyon",
+        "milyard", "faiz", "derece", "santimetr", "metr", "kilometr", "kiloqram",
+        "qram", "litr", "ton", "gun", "saat", "deqiqe", "il", "ay", "hefte",
+        "zaman", "yer", "adam", "insan", "usaq", "qadin", "kisi", "heyat", "dunya",
+        "su", "hava", "od", "torpaq", "bitki", "heyvan", "quş", "qus", "balıq",
+        "balig", "agac", "gul", "ciçek", "cicek", "meyve", "tervez", "yemek", "icmek",
+        "getmek", "gelmek", "bilmek", "gormek", "demek", "vermek", "almaq", "etmek",
+        "isteyir", "isteyirem", "bilir", "bilirem", "gorunur", "deyil", "deyildir",
+        "hansı", "hansi", "nece", "niye", "nedir", "harada", "kim", "ne", "vaxt",
+        "her", "butun", "hamisi", "coxu", "azliq", "coxluq", "boyuk", "kicik",
+        "yaxsi", "pis", "yeni", "kohne", "asagi", "yuxari", "iceride", "bayirda",
+        "basliq", "metn", "soz", "cumle", "cavab", "sual", "melumat", "fakt",
+        "esas", "sebeb", "netice", "numune", "misal", "hal", "veziyyet", "proses",
+        "usul", "qayda", "teref", "hisse", "merhele", "addim", "vaxt", "formula",
+        "hesab", "olcu", "vahid", "qiymet", "gosterici", "seviyye", "artim", "azalma"
+    };
+    return w;
+}
+
+inline bool az_token_is_known(const std::string& w,
+                              const std::unordered_set<std::string>& vocab,
+                              const std::unordered_set<std::string>& prefixes) {
+    if (w.size() < 4) return true;
+    if (vocab.count(w) || az_common_words().count(w)) return true;
+    const auto& dict = az_ascii_dictionary();
+    if (dict.count(w)) return true;
+    for (const auto& kv : dict)
+        if (az_fold(kv.second) == w) return true;
+
+    static const char* SUF[] = {
+        "larindan", "lerinden", "larinda", "lerinde", "larinin", "lerinin",
+        "lardan", "lerden", "larda", "lerde", "larin", "lerin", "lara", "lere",
+        "lari", "leri", "lar", "ler", "dir", "dur", "den", "dan", "de", "da",
+        "nin", "nun", "ini", "unu", "ine", "una", "inin", "unun", "liq", "lik",
+        "luq", "luk", "ci", "cu", "siz", "suz", "mis", "mus", "acaq", "ecek",
+        "ir", "ur", "ar", "er", "in", "un", "li", "lu", "ya", "ye", "si", "su",
+        "i", "u", "a", "e"
+    };
+    std::string rest = w;
+    for (int step = 0; step < 3; ++step) {
+        bool cut = false;
+        for (const char* s : SUF) {
+            const std::string suf(s);
+            if (rest.size() <= suf.size() + 3) continue;
+            if (!ends_with(rest, suf)) continue;
+            rest = rest.substr(0, rest.size() - suf.size());
+            cut = true;
+            break;
+        }
+        if (!cut) break;
+        if (vocab.count(rest) || az_common_words().count(rest)) return true;
+    }
+    if (w.size() >= 7 && !prefixes.empty() && prefixes.count(w.substr(0, 6)))
+        return true;
+    return false;
+}
+
+struct AzWordStats {
+    size_t total = 0;
+    size_t unknown = 0;
+    double ratio() const { return total ? static_cast<double>(unknown) / total : 0.0; }
+};
+
+inline AzWordStats measure_unknown_words(const std::string& text,
+                                         const std::unordered_set<std::string>& vocab,
+                                         const std::unordered_set<std::string>& prefixes) {
+    AzWordStats st;
+    if (vocab.size() < 1000) return st;  // corpus missing: check disabled
+    const std::string clean = az_fold(strip_meta_labels(text));
+    std::string cur;
+    auto flush = [&]() {
+        if (cur.size() >= 4) {
+            bool digit = false;
+            for (char c : cur)
+                if (std::isdigit(static_cast<unsigned char>(c))) digit = true;
+            if (!digit) {
+                ++st.total;
+                if (!az_token_is_known(cur, vocab, prefixes)) ++st.unknown;
+            }
+        }
+        cur.clear();
+    };
+    for (char c : clean) {
+        if (c == ' ') flush();
+        else cur.push_back(c);
+    }
+    flush();
+    return st;
+}
 
 // ---------------------------------------------------------------------------
 // Feed calculations

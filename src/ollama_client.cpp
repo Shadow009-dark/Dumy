@@ -124,6 +124,10 @@ bool do_request(const RequestSpec& spec,
 
 nlohmann::json options_json(const ChatOptions& o) {
     nlohmann::json j = {{"temperature", o.temperature}};
+    // Sampling knobs are part of the generation plan: sending them explicitly
+    // keeps a 4B model from drifting into repeated / invented text.
+    if (o.top_p > 0.0 && o.top_p <= 1.0) j["top_p"] = o.top_p;
+    if (o.repeat_penalty > 0.0) j["repeat_penalty"] = o.repeat_penalty;
     if (o.num_predict > 0) j["num_predict"] = o.num_predict;
     if (o.num_ctx > 0) j["num_ctx"] = o.num_ctx;
     // num_gpu changes the load plan: -1 (default) must be omitted so Ollama
@@ -245,7 +249,9 @@ std::string OllamaClient::chat(const std::string& model,
         if (timing) *timing = timing_from_json(j);
         std::string content = j.value("message", nlohmann::json::object())
                                   .value("content", std::string());
-        return strip_thinking(content);
+        // A model can emit an invalid UTF-8 byte; nlohmann::json::dump()
+        // throws on that, which used to abort an SSE response mid-stream.
+        return sanitize_utf8(strip_thinking(content));
     } catch (const std::exception& e) {
         if (err) *err = std::string("bad Ollama response: ") + e.what();
         return "";
@@ -305,7 +311,7 @@ std::string OllamaClient::chat_stream(const std::string& model,
     // Emit the cleaned (thinking-stripped) text as a single correction pass
     // only when stripping actually changed something - the stream already
     // showed the raw deltas, so just return the final cleaned text.
-    return strip_thinking(full);
+    return sanitize_utf8(strip_thinking(full));
 }
 
 bool OllamaClient::embed(const std::string& model,

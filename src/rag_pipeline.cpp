@@ -223,6 +223,103 @@ size_t total_tokens(const std::vector<Chunk>& chunks, double chars_per_token) {
 // when its identity (PDF base name / URL) appears anywhere in the answer,
 // so slight label variations ("səh. 203-204") still match. Everything else
 // is NOT attached to the sources list.
+// Post-check for citations: a [Mənbə: file, səh. N] label survives only when
+// the cited chunk is really in the context AND its text shares a key entity
+// with the sentence the label supports. Otherwise it becomes [Ümumi bilik].
+std::string enforce_citation_support(const std::string& in,
+                                     const std::vector<Chunk>& used) {
+    const std::string open = "[Mənbə: ";
+    if (in.find(open) == std::string::npos) return in;
+    std::string out = in;
+    size_t pos = 0;
+    while ((pos = out.find(open, pos)) != std::string::npos) {
+        const size_t inner = pos + open.size();
+        const size_t close = out.find(']', inner);
+        if (close == std::string::npos) break;
+        const std::string content = out.substr(inner, close - inner);
+
+        std::string file = content;
+        int page = 0;
+        const size_t comma = content.rfind(',');
+        if (comma != std::string::npos) {
+            file = trim(content.substr(0, comma));
+            const std::string tail = az_fold(content.substr(comma + 1));
+            const size_t p = tail.find("seh.");
+            if (p != std::string::npos) page = std::atoi(tail.c_str() + p + 4);
+        }
+
+        const Chunk* match = nullptr;
+        for (const auto& c : used) {
+            if (c.kind == "web") continue;
+            std::string name = c.source;
+            const size_t slash = name.find_last_of("/\\");
+            if (slash != std::string::npos) name = name.substr(slash + 1);
+            if (name != file) continue;
+            if (page > 0 && c.page != page) continue;
+            match = &c;
+            break;
+        }
+
+        bool ok = false;
+        if (match) {
+            size_t start = 0;
+            for (size_t i = pos; i > 0; --i) {
+                const char c = out[i - 1];
+                if (c == '.' || c == '!' || c == '?' || c == '\n') {
+                    start = i;
+                    break;
+                }
+            }
+            if (pos > start + 400) start = pos - 400;
+            const std::string sentence = out.substr(start, pos - start);
+            const auto terms = relevance_key_terms(sentence);
+            if (terms.empty()) {
+                ok = true;  // nothing to verify: never drop a label blindly
+            } else {
+                const auto words = az_words(match->text);
+                size_t matched = 0;
+                for (const auto& t : terms) {
+                    for (const auto& w : words) {
+                        if (az_words_match(t, w)) { ++matched; break; }
+                    }
+                }
+                ok = matched >= 1;
+                if (!ok)
+                    log_info("citation post-check: dropped '" + content +
+                             "' (no shared key entity with its sentence)");
+            }
+        } else {
+            log_info("citation post-check: dropped '" + content +
+                     "' (chunk not in context)");
+        }
+
+        if (ok) {
+            pos = close + 1;
+        } else {
+            out.replace(pos, close - pos + 1, "[Ümumi bilik]");
+            pos += 12;
+        }
+    }
+    return out;
+}
+
+// True when at least one key term of `question` appears in `answer` (same
+// 5-character stem or a real inflection). Used for off-domain short answers.
+bool subject_mentioned(const std::vector<std::string>& terms,
+                       const std::string& answer) {
+    if (terms.empty()) return true;
+    const auto words = az_words(answer);
+    auto stem = [](const std::string& w) { return w.substr(0, std::min<size_t>(5, w.size())); };
+    for (const auto& t : terms) {
+        const std::string ts = stem(t);
+        for (const auto& w : words) {
+            if (stem(w) == ts) return true;
+            if (az_words_match(t, w)) return true;
+        }
+    }
+    return false;
+}
+
 std::vector<Chunk> cited_chunks(const std::string& answer,
                                 const std::vector<Chunk>& used) {
     std::vector<Chunk> out;
@@ -478,6 +575,33 @@ bool RagPipeline::warmup(std::string* err) {
     }
     if (err && !ok) *err = warmup_.note;
     return ok;
+}
+
+void RagPipeline::ensure_vocabulary() const {
+    std::call_once(vocab_once_, [this]() {
+        if (!store_) return;
+        for (const auto& c : store_->all()) {
+            std::string cur;
+            for (char ch : az_fold(c.text)) {
+                if (ch == ' ') {
+                    if (cur.size() >= 4) vocab_.insert(cur);
+                    cur.clear();
+                } else {
+                    cur.push_back(ch);
+                }
+            }
+            if (cur.size() >= 4) vocab_.insert(cur);
+        }
+        for (const auto& w : vocab_)
+            if (w.size() >= 6) vocab_prefixes_.insert(w.substr(0, 6));
+        log_info("word check: PDF vocabulary=" + std::to_string(vocab_.size()) +
+                 " prefixes=" + std::to_string(vocab_prefixes_.size()));
+    });
+}
+
+AzWordStats RagPipeline::unknown_word_stats(const std::string& text) const {
+    ensure_vocabulary();
+    return measure_unknown_words(text, vocab_, vocab_prefixes_);
 }
 
 std::vector<Chunk> RagPipeline::rerank_or_trim(const std::string& question,
@@ -820,10 +944,178 @@ AnswerResult RagPipeline::answer(const std::string& question,
         return res;
     }
 
+    // --- 1c. Declarative statement -> fact-check mode -----------------------
+    // "Title: statement" is not a question: it needs a verdict, not an echoed
+    // explanation. Running before retrieval also keeps general facts away from
+    // the agriculture PDFs entirely.
+    if (cfg_.fact_check_enabled && is_statement_input(q)) {
+        log_info("fastpath: statement/fact-check mode");
+        res.qtype = "fact_check";
+        res.no_sources = true;
+        res.from_own_knowledge = true;
+        ChatOptions fc_opts = cfg_.chat_options(cfg_.fact_check_num_predict, 0.0);
+        std::string ferr;
+        ChatTiming ftiming;
+        StageTimer t_fc;
+        const std::string raw = ollama_.chat(
+            chat_model_, {{"user", build_fact_check_user_message(q)}}, fc_opts,
+            &ferr, &ftiming);
+        log_model_call("fact_check", chat_model_,
+                       static_cast<long long>(t_fc.ms()), ftiming.load_ms,
+                       ftiming.prompt_eval_ms, ftiming.eval_ms,
+                       ftiming.prompt_tokens, ftiming.eval_tokens,
+                       ftiming.done_reason);
+        std::string out = shape_fact_check_answer(raw, q);
+
+        // Two-pass agreement: a 4B model is over-confident, so a second
+        // adversarial pass must reach the same verdict. Disagreement is an
+        // honest "Dəqiq bilmirəm", never a confident wrong answer.
+        {
+            ChatOptions adv_opts = cfg_.chat_options(cfg_.fact_check_num_predict, 0.2);
+            std::string aerr;
+            ChatTiming atiming;
+            StageTimer t_adv;
+            const std::string raw2 = ollama_.chat(
+                chat_model_, {{"user", build_fact_check_refute_message(q)}}, adv_opts,
+                &aerr, &atiming);
+            log_model_call("fact_check_refute", chat_model_,
+                           static_cast<long long>(t_adv.ms()), atiming.load_ms,
+                           atiming.prompt_eval_ms, atiming.eval_ms,
+                           atiming.prompt_tokens, atiming.eval_tokens,
+                           atiming.done_reason);
+            if (!trim(raw2).empty()) {
+                const std::string out2 = shape_fact_check_answer(raw2, q);
+                const std::string v1 = fc_verdict(out);
+                const std::string v2 = fc_verdict(out2);
+                log_info("fact_check agreement: v1=" + v1 + " v2=" + v2);
+                if (v1 != v2) {
+                    out = "Dəqiq bilmirəm. İki yoxlama fərqli nəticə verdi, ona "
+                          "görə bu iddianı təsdiqləyə bilmirəm.";
+                }
+            } else {
+                log_warn("fact_check refute pass failed: " + aerr);
+            }
+        }
+        const AzWordStats ws = unknown_word_stats(out);
+        const bool garbled =
+            ws.total >= static_cast<size_t>(cfg_.garbled_word_min_words) &&
+            ws.ratio() > cfg_.garbled_word_ratio_max;
+        if (garbled) {
+            log_warn("fact_check: garbled output (unknown=" +
+                     std::to_string(ws.unknown) + "/" + std::to_string(ws.total) +
+                     " ratio=" + std::to_string(ws.ratio()) +
+                     ") -> uncertain verdict; draft=[" + utf8_prefix(out, 200) + "]");
+            out = "Dəqiq bilmirəm. Cavabın dili etibarsız göründüyü üçün bu "
+                  "iddianı təsdiqləyə bilmirəm.";
+        }
+        log_info("fact_check: chars=" + std::to_string(out.size()) +
+                 " unknown=" + std::to_string(ws.unknown) + "/" +
+                 std::to_string(ws.total) +
+                 " verdict_head=[" + utf8_prefix(out, 40) + "]");
+        res.answer = out;
+        if (on_delta) on_delta(out);
+        return res;
+    }
+
     // --- 2. routing (question-type analysis) --------------------------------
     StageTimer t_route;
     const QuestionType qtype = retriever_.analyze(q);
     res.qtype = question_type_name(qtype);
+
+    // --- 2a. Off-domain questions: no PDF, honest short answer --------------
+    // The indexed books are agriculture/veterinary. For anything else the 4B
+    // model is unreliable, so procedures/grammar/lists get a deterministic
+    // refusal and simple facts/definitions get one short answer that must pass
+    // the word-validity, subject and domain-drift checks.
+    if (!has_agri_keyword(q)) {
+        res.qtype = "general";
+        res.no_sources = true;
+        res.from_own_knowledge = true;
+        const bool grammar = is_grammar_topic(q);
+        const bool procedure = is_procedure_request(q) || is_list_question(q);
+        if (grammar || procedure) {
+            res.answer = OUT_OF_SCOPE_MESSAGE;
+            log_info(std::string("off-domain: ") +
+                     (grammar ? "grammar" : "procedure/list") +
+                     " -> honest refusal");
+        } else {
+            auto attempt = [&](const std::string& prompt,
+                               const char* tag) -> std::string {
+                ChatOptions g_opts = cfg_.chat_options(
+                    std::min(cfg_.fact_check_num_predict, 220), 0.0);
+                std::string gerr;
+                ChatTiming gtiming;
+                StageTimer t_g;
+                const std::string raw = ollama_.chat(
+                    chat_model_, {{"user", prompt}}, g_opts, &gerr, &gtiming);
+                log_model_call(tag, chat_model_,
+                               static_cast<long long>(t_g.ms()), gtiming.load_ms,
+                               gtiming.prompt_eval_ms, gtiming.eval_ms,
+                               gtiming.prompt_tokens, gtiming.eval_tokens,
+                               gtiming.done_reason);
+                return trim_count_answer(q, trim_to_last_sentence(
+                    drop_trailing_uncertainty(strip_meta_headers(strip_meta_labels(trim(
+                        strip_clarification_offer(strip_own_sources(
+                            OllamaClient::strip_thinking(raw)))))))));
+            };
+            // The vocabulary is built from the agriculture PDFs, so a correct
+            // off-domain sentence ("100 gradus Santuslu") scores worse than a
+            // domain answer. Allow up to 3 rare words in a real sentence.
+            auto accept = [&](std::string& out, AzWordStats& ws,
+                              bool& subject_ok) -> bool {
+                if (fc_sentence_count(out) > 3) out = limit_sentences(out, 3);
+                ws = unknown_word_stats(out);
+                subject_ok = subject_mentioned(relevance_key_terms(q), out);
+                const bool word_ok =
+                    ws.total == 0 || (ws.unknown <= 3 && ws.total >= 12) ||
+                    ws.ratio() <= cfg_.garbled_word_ratio_max;
+                return !out.empty() && out.size() >= 12 &&
+                       !is_degenerate_answer(out) && word_ok && subject_ok &&
+                       !answer_uses_domain_markers(out) &&
+                       out.find("dəqiq məlumatım yoxdur") == std::string::npos;
+            };
+
+            AzWordStats ws;
+            bool subject_ok = false;
+            std::string out = attempt(build_general_fact_user_message(q),
+                                      "general_direct");
+            bool ok = accept(out, ws, subject_ok);
+            log_info("general_direct: chars=" + std::to_string(out.size()) +
+                     " sentences=" + std::to_string(fc_sentence_count(out)) +
+                     " unknown=" + std::to_string(ws.unknown) + "/" +
+                     std::to_string(ws.total) +
+                     " subject=" + (subject_ok ? "1" : "0") +
+                     " accepted=" + (ok ? "1" : "0"));
+            if (!ok) {
+                log_warn("general_direct: rejected, one clean retry; draft=[" +
+                         utf8_prefix(out, 160) + "]");
+                std::string out2 =
+                    attempt(build_plain_answer_message(q), "general_retry");
+                AzWordStats ws2;
+                bool subject2 = false;
+                if (accept(out2, ws2, subject2)) {
+                    out = out2;
+                    ws = ws2;
+                    subject_ok = subject2;
+                    ok = true;
+                    log_info("general_retry: accepted chars=" +
+                             std::to_string(out.size()) + " unknown=" +
+                             std::to_string(ws.unknown) + "/" +
+                             std::to_string(ws.total));
+                }
+            }
+            if (ok) {
+                res.answer = out;
+            } else {
+                res.answer = OUT_OF_SCOPE_MESSAGE;
+                log_warn("general_direct: answer rejected - honest refusal; draft=[" +
+                         utf8_prefix(out, 200) + "]");
+            }
+        }
+        if (on_delta) on_delta(res.answer);
+        return res;
+    }
+
     // Short, non-topic messages ("bəli", "yox", "hmm") must not trigger web
     // search - greetings are already handled by the fast path above.
     const bool short_non_topic =
@@ -946,9 +1238,12 @@ AnswerResult RagPipeline::answer(const std::string& question,
         // key terms, so a sufficient overlap is real evidence. Requiring ALL
         // terms dropped valid contexts (e.g. "qarın şişməsi" where a chunk
         // says "şişkinlik"), so the share is used instead.
-        const bool lex_ok = !terms.empty() && matched >= 1 &&
+        // Rule (b): at least TWO distinct main entities of the question have
+        // to occur in the retained chunk (one when the question only has one).
+        const size_t need = terms.empty() ? 0 : std::min<size_t>(2, terms.size());
+        const bool lex_ok = !terms.empty() && matched >= need &&
                             overlap >= cfg_.relevance_min_overlap;
-        const bool score_ok = matched >= 1 &&
+        const bool score_ok = matched >= need &&
                               pdf_result.max_score >= cfg_.relevance_check_score;
         bool keep = true;
         std::string branch = "lexical";
@@ -1128,7 +1423,10 @@ AnswerResult RagPipeline::answer(const std::string& question,
         return msgs;
     };
 
-    ChatOptions draft_opts = cfg_.chat_options(cfg_.num_predict_draft, 0.3);
+    // Tuned sampling (P3): temperature 0.25 with top_p 0.9 and
+    // repeat_penalty 1.1 - the previous draft used 0.3 and sent neither
+    // top_p nor repeat_penalty to Ollama at all.
+    ChatOptions draft_opts = cfg_.chat_options(cfg_.num_predict_draft, 0.25);
     StageTimer t_draft;
     std::string derr;
     std::string draft;
@@ -1331,6 +1629,9 @@ AnswerResult RagPipeline::answer(const std::string& question,
         strip_dangling_source_label(strip_clarification_offer(fix_url_labels(
             strip_summary_labels(OllamaClient::strip_thinking(final_answer))))),
         selected);
+    // Rule (c): a label whose page text shares no key entity with the sentence
+    // it supports is not a source - drop it.
+    final_answer = enforce_citation_support(final_answer, selected);
 
     // --- 8. strip model-written source list, add notes + safety warning ----
     // Sources appear ONLY in the API's sources list (UI collapsible), never
@@ -1340,6 +1641,52 @@ AnswerResult RagPipeline::answer(const std::string& question,
     // very end, only when the question concerns health/diagnosis/treatment).
     final_answer = strip_trailing_source_lines(
         strip_silent_check(strip_safety_line(strip_own_sources(final_answer))));
+
+    // --- 7a. word-validity (garbled text) guard ----------------------------
+    // If more than the allowed share of words are non-words, one deterministic
+    // retry with a shorter budget; if that is still garbled, an honest short
+    // answer is better than a confident nonsense paragraph.
+    {
+        const AzWordStats ws = unknown_word_stats(final_answer);
+        const bool checkable =
+            ws.total >= static_cast<size_t>(cfg_.garbled_word_min_words);
+        if (checkable && ws.ratio() > cfg_.garbled_word_ratio_max) {
+            log_warn("garbled check: unknown=" + std::to_string(ws.unknown) + "/" +
+                     std::to_string(ws.total) + " ratio=" + std::to_string(ws.ratio()) +
+                     " > " + std::to_string(cfg_.garbled_word_ratio_max) +
+                     " - retry at temperature 0.1 with shorter num_predict");
+            ChatOptions retry_opts =
+                cfg_.chat_options(std::min(cfg_.num_predict_draft, 260), 0.1);
+            std::string gerr;
+            ChatTiming gtiming;
+            StageTimer t_g;
+            std::string again =
+                ollama_.chat(chat_model_, messages, retry_opts, &gerr, &gtiming);
+            log_model_call("draft_garbled_retry", chat_model_,
+                           static_cast<long long>(t_g.ms()), gtiming.load_ms,
+                           gtiming.prompt_eval_ms, gtiming.eval_ms,
+                           gtiming.prompt_tokens, gtiming.eval_tokens,
+                           gtiming.done_reason);
+            again = trim_to_last_sentence(strip_meta_labels(
+                trim(strip_clarification_offer(strip_own_sources(
+                    OllamaClient::strip_thinking(again))))));
+            const AzWordStats ws2 = unknown_word_stats(again);
+            if (!again.empty() && !is_degenerate_answer(again) &&
+                (!ws2.total || ws2.ratio() <= cfg_.garbled_word_ratio_max)) {
+                final_answer = again;
+                log_info("garbled retry accepted (unknown=" +
+                         std::to_string(ws2.unknown) + "/" +
+                         std::to_string(ws2.total) + ")");
+            } else {
+                final_answer = GARBLED_FALLBACK_MESSAGE;
+                log_warn("garbled retry still invalid - honest short answer");
+            }
+        } else if (ws.total) {
+            log_info("word check: unknown=" + std::to_string(ws.unknown) + "/" +
+                     std::to_string(ws.total) + " ratio=" +
+                     std::to_string(ws.ratio()));
+        }
+    }
     // --- 7b. answer-quality gate ------------------------------------------
     // Never return an empty answer, a bare clarification offer, a generation
     // loop or (for a general question) an answer that drifted into the
@@ -1349,15 +1696,23 @@ AnswerResult RagPipeline::answer(const std::string& question,
     const bool off_domain = pdf_relevance_failed &&
                             answer_uses_domain_markers(final_answer) &&
                             !answer_uses_domain_markers(q);
+    // Relaxed false-rejection rule (P4): an explicit sentence limit ("bir
+    // cümlə ilə") and short factual answers are legitimately short; the old
+    // 80-character floor turned them into "cavab yarada bilmədim".
+    const bool short_ok = requested_sentences > 0 || qtype == QuestionType::General;
     const bool too_short =
-        cfg_.quality_check_enabled && !degenerate &&
+        cfg_.quality_check_enabled && !degenerate && !short_ok &&
         final_answer.size() <
             static_cast<size_t>(std::max(0, cfg_.quality_min_answer_chars));
     if (degenerate || too_short || repetitive || off_domain) {
-        log_warn(std::string("quality gate: ") +
-                 (degenerate ? "degenerate" : repetitive ? "repetitive"
-                               : off_domain ? "off-domain" : "short") +
-                 " answer (" + std::to_string(final_answer.size()) + " chars) - strict retry");
+        log_warn("quality gate: reject reasons=[degenerate=" +
+                 std::string(degenerate ? "1" : "0") + ",repetitive=" +
+                 std::string(repetitive ? "1" : "0") + ",off_domain=" +
+                 std::string(off_domain ? "1" : "0") + ",too_short=" +
+                 std::string(too_short ? "1" : "0") + "(" +
+                 std::to_string(final_answer.size()) + "<" +
+                 std::to_string(cfg_.quality_min_answer_chars) + ")] draft=[" +
+                 utf8_prefix(final_answer, 120) + "] - strict retry");
         std::string serr;
         ChatTiming stiming;
         StageTimer t_strict;
@@ -1402,7 +1757,35 @@ AnswerResult RagPipeline::answer(const std::string& question,
         cfg_.max_general_sentences > 0) {
         final_answer = limit_sentences(final_answer, cfg_.max_general_sentences);
     }
+    // Never return an answer that stops mid-word / mid-sentence.
+    final_answer = trim_to_last_sentence(final_answer);
     res.used_chunks = cited_chunks(final_answer, selected);
+
+    // Deterministic provenance fallback: the 4B model often answers from the
+    // kept context without writing a "[Mənbə: ...]" label, which left grounded
+    // livestock answers with zero PDF sources. Cite the best non-web chunk once
+    // when the answer really shares key terms with it.
+    if (final_answer.find("[Mənbə:") == std::string::npos && !selected.empty()) {
+        const auto terms = relevance_key_terms(q);
+        for (const auto& c : selected) {
+            if (c.kind == "web" || c.source.empty()) continue;
+            const std::string body = az_fold(c.text);
+            size_t shared = 0;
+            for (const auto& t : terms)
+                if (t.size() >= 3 && body.find(t) != std::string::npos) ++shared;
+            if (shared < 2) continue;
+            std::string name = c.source;
+            const size_t slash = name.find_last_of("/\\");
+            if (slash != std::string::npos) name = name.substr(slash + 1);
+            final_answer = trim(final_answer) + " [Mənbə: " + name + ", səh. " +
+                           std::to_string(c.page) + "]";
+            res.used_chunks.push_back(c);
+            log_info("citation fallback: attached " + name + " p." +
+                     std::to_string(c.page) + " (shared terms=" +
+                     std::to_string(shared) + ")");
+            break;
+        }
+    }
 
     std::string out = final_answer;
     if (selected.empty()) {

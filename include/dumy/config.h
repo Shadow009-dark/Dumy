@@ -153,6 +153,10 @@ struct Config {
     std::vector<std::string> allowed_origins = {
         "http://localhost:8085", "http://127.0.0.1:8085"};
     int rate_limit_per_minute = 20;      // per IP; 0 = disabled
+    // The local UI sends many questions back to back; loopback is exempt by
+    // default (a tunnel / reverse proxy still hits the per-IP limit above).
+    bool rate_limit_exempt_loopback = true;
+    int rate_limit_localhost_per_minute = 0;  // 0 = unlimited on loopback
     int max_question_chars = 2000;
     int max_body_kb = 256;               // JSON body limit for /chat
     bool log_questions = false;          // do not log user text by default
@@ -163,6 +167,14 @@ struct Config {
     int web_search_timeout_sec = 3;      // total per engine call
     int web_memory_cache_minutes = 10;   // in-process result cache
     int max_general_sentences = 5;       // no-context answer cap
+
+    // --- Statement / fact-check routing ---
+    bool fact_check_enabled = true;      // "Title: statement" -> verdict
+    int fact_check_num_predict = 160;    // verdict + 1-2 short sentences
+
+    // --- Garbled-output guard (word validity) ---
+    double garbled_word_ratio_max = 0.12;  // share of unknown words allowed
+    int garbled_word_min_words = 10;       // shorter answers are not checked
 
     // --- Runtime (not from JSON) ---
     std::string config_path;            // absolute path of the loaded config file

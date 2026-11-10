@@ -20,6 +20,14 @@
 #include <mutex>
 #include <thread>
 
+#ifdef _WIN32
+#include <process.h>
+#define DUMY_GETPID _getpid
+#else
+#include <unistd.h>
+#define DUMY_GETPID getpid
+#endif
+
 #include "dumy/common.h"
 #include "dumy/prompts.h"
 
@@ -51,12 +59,25 @@ void apply_cors(const httplib::Request& req, httplib::Response& res) {
     }
 }
 
+// nlohmann::json::dump() throws on invalid UTF-8. Error bodies must never
+// escape as a broken response (the browser reports that as "Failed to fetch"),
+// so a serialization failure falls back to a plain Azerbaijani message.
+std::string safe_dump(const nlohmann::json& body) {
+    try {
+        return body.dump();
+    } catch (const std::exception& e) {
+        log_error(std::string("json dump failed: ") + e.what());
+        return std::string(
+            "{\"error\":\"cavab JSON kimi göstərilə bilmədi\"}");
+    }
+}
+
 void reply_json(const httplib::Request& req, httplib::Response& res, int status,
                 const nlohmann::json& body) {
     apply_cors(req, res);
     res.status = status;
     res.set_header("Cache-Control", "no-store");
-    res.set_content(body.dump(), "application/json; charset=utf-8");
+    res.set_content(safe_dump(body), "application/json; charset=utf-8");
 }
 
 // Parses the request body as JSON; on failure replies 400 and returns false.
@@ -65,7 +86,11 @@ bool parse_body(const httplib::Request& req, httplib::Response& res, nlohmann::j
         out = nlohmann::json::parse(req.body.empty() ? "{}" : req.body);
         return true;
     } catch (const std::exception& e) {
-        reply_json(req, res, 400, {{"error", std::string("invalid JSON body: ") + e.what()}});
+        // e.what() can quote invalid bytes from the request body; sanitize it
+        // so the 400 response itself is always serializable.
+        reply_json(req, res, 400,
+                   {{"error", sanitize_utf8(std::string("sorğu JSON-u səhvdir: ") +
+                                                  e.what())}});
         return false;
     }
 }
@@ -102,6 +127,7 @@ std::map<std::string, RateEntry>& rate_map() {
 
 // Fixed one-minute window per IP; it only has to stop accidental floods and
 // a single abusive client, not bill anyone, so a simple map is enough.
+// per_minute <= 0 disables the limit for that class of client.
 bool rate_limited(const std::string& ip, int per_minute) {
     if (per_minute <= 0) return false;
     const auto now = std::chrono::steady_clock::now();
@@ -131,8 +157,12 @@ bool check_api_access(const httplib::Request& req, httplib::Response& res,
                    {{"error", "API açarı tələb olunur (X-API-Key başlığı)"}});
         return false;
     }
-    if (apply_rate_limit &&
-        rate_limited(req.remote_addr, g_cfg->rate_limit_per_minute)) {
+    // Loopback (the built-in UI, tests, a same-machine proxy) has its own limit
+    // and is exempt by default: 14 quick manual questions used to hit 429.
+    int limit = g_cfg->rate_limit_per_minute;
+    if (g_cfg->rate_limit_exempt_loopback && is_loopback(req.remote_addr))
+        limit = g_cfg->rate_limit_localhost_per_minute;
+    if (apply_rate_limit && rate_limited(req.remote_addr, limit)) {
         res.set_header("Retry-After", "60");
         reply_json(req, res, 429,
                    {{"error", "çox sorğu - dəqiqədə " +
@@ -176,6 +206,11 @@ struct HttpServer::Impl {
     std::mutex health_mutex;                   // serializes the live Ollama probe
     bool ollama_alive = false;
     std::chrono::steady_clock::time_point ollama_checked_at{};
+    // Identity of THIS process, so a test harness can prove /health belongs to
+    // the server it launched (and detect a crash/restart mid-suite).
+    std::string build_id = std::string(__DATE__) + " " + __TIME__;
+    long long started_at = 0;
+    long long pid = 0;
 };
 
 HttpServer::~HttpServer() = default;
@@ -188,6 +223,11 @@ HttpServer::HttpServer(const Config& cfg, RagPipeline& pipeline, Indexer& indexe
 bool HttpServer::start(std::string* err) {
     auto& svr = impl_->svr;
     g_cfg = &cfg_;
+    impl_->started_at = static_cast<long long>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count());
+    impl_->pid = static_cast<long long>(DUMY_GETPID());
     // Uploads can be large PDFs; chat/JSON bodies stay small.
     svr.set_payload_max_length(static_cast<size_t>(cfg_.upload_max_mb) * 1024 * 1024 +
                                1024 * 1024);
@@ -246,8 +286,16 @@ bool HttpServer::start(std::string* err) {
             }
         }
         const WarmupInfo& w = pipeline_.warmup_info();
+        const long long now_s = static_cast<long long>(
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count());
         nlohmann::json body = {
             {"status", "ok"},
+            {"build_id", impl_->build_id},
+            {"started_at", impl_->started_at},
+            {"pid", impl_->pid},
+            {"uptime_sec", now_s - impl_->started_at},
             {"ollama", alive},
             {"chat_model", pipeline_.chat_model()},
             {"helper_model", pipeline_.helper_model()},
@@ -304,7 +352,8 @@ bool HttpServer::start(std::string* err) {
             AnswerResult r = pipeline_.answer(message, session_id, nullptr);
             reply_json(req, res, 200,
                        {{"session_id", session_id},
-                        {"answer", r.answer},
+                        // sanitize: an invalid UTF-8 byte would make dump() throw
+                        {"answer", sanitize_utf8(r.answer)},
                         {"sources", r.sources_json()},
                         {"qtype", r.qtype},
                         {"refused", r.refused},
@@ -365,7 +414,14 @@ bool HttpServer::start(std::string* err) {
                 }
 
                 auto send = [&sink](const nlohmann::json& ev) {
-                    const std::string line = "data: " + ev.dump() + "\n\n";
+                    std::string line;
+                    try {
+                        line = "data: " + ev.dump() + "\n\n";
+                    } catch (const std::exception& e) {
+                        // Never let an unserializable event abort the stream.
+                        log_warn(std::string("stream: event dump failed: ") + e.what());
+                        return true;
+                    }
                     return sink.write(line.data(), line.size());
                 };
 
@@ -390,19 +446,32 @@ bool HttpServer::start(std::string* err) {
 
                 log_info("stream: answer_chars=" + std::to_string(r.answer.size()) +
                          " qtype=" + r.qtype + " warning=" + r.warning);
-                if (!send({{"type", "done"},
-                      {"session_id", session_copy},
-                      {"answer", r.answer},
-                      {"sources", r.sources_json()},
-                      {"qtype", r.qtype},
-                      {"refused", r.refused},
-                      {"web_used", r.used_web},
-                      {"map_reduce", r.used_map_reduce},
-                      {"own_knowledge", r.from_own_knowledge},
-                      {"self_check_failed", r.self_check_failed},
-                      {"self_check_retries", r.self_check_retries},
-                      {"warning", r.warning}}))
-                    log_warn("stream: done event write failed (client disconnected)");
+                // The done event is built outside the try/catch above, so its
+                // own try/catch guarantees a stream always ends cleanly.
+                try {
+                    const nlohmann::json done = {
+                        {"type", "done"},
+                        {"session_id", session_copy},
+                        {"answer", sanitize_utf8(r.answer)},
+                        {"sources", r.sources_json()},
+                        {"qtype", r.qtype},
+                        {"refused", r.refused},
+                        {"web_used", r.used_web},
+                        {"map_reduce", r.used_map_reduce},
+                        {"own_knowledge", r.from_own_knowledge},
+                        {"self_check_failed", r.self_check_failed},
+                        {"self_check_retries", r.self_check_retries},
+                        {"warning", sanitize_utf8(r.warning)}};
+                    if (!send(done))
+                        log_warn("stream: done event write failed (client disconnected)");
+                } catch (const std::exception& e) {
+                    log_error(std::string("stream: done event failed: ") + e.what());
+                    try {
+                        send({{"type", "error"},
+                              {"message", "cavab göndərilə bilmədi"}});
+                    } catch (...) {
+                    }
+                }
                 sink.done();
                 return true;
             });
@@ -525,27 +594,45 @@ bool HttpServer::start(std::string* err) {
     // handler exception shows up as 500, not a fake 404. Everything is
     // logged so sporadic routing problems can be diagnosed.
     svr.set_error_handler([](const httplib::Request& req, httplib::Response& res) {
+        // CORS is applied to EVERY error response, including 429/401/500, so a
+        // browser sees the JSON reason instead of a network/CORS failure.
         apply_cors(req, res);
-        if (!res.body.empty()) return;  // handler already replied with a reason
         const int code = (res.status >= 400) ? res.status : 500;
         res.status = code;
         log_warn("HTTP " + std::to_string(code) + " on " + req.method + " " +
-                 req.path);
+                 req.path + (res.body.empty() ? "" : " (handled)"));
+        if (!res.body.empty()) return;  // handler already replied with a reason
+        res.set_header("Cache-Control", "no-store");
         if (code == 404) {
             res.set_content(
-                nlohmann::json({{"error", "not found"},
-                                {"endpoints", {"/", "/chat", "/chat/stream",
-                                               "/ingest", "/health", "/documents",
-                                               "/upload"}}})
-                    .dump(),
+                safe_dump(nlohmann::json({{"error", "tapılmadı (404)"},
+                                          {"endpoints", {"/", "/chat", "/chat/stream",
+                                                         "/ingest", "/health",
+                                                         "/documents", "/upload"}}})),
                 "application/json; charset=utf-8");
         } else {
             res.set_content(
-                nlohmann::json({{"error", "server error (HTTP " +
-                                               std::to_string(code) + ")"}})
-                    .dump(),
+                safe_dump(nlohmann::json({{"error", "server xətası (HTTP " +
+                                                       std::to_string(code) + ")"}})),
                 "application/json; charset=utf-8");
         }
+    });
+
+    // Last line of defence: an exception escaping a handler (bad UTF-8, a
+    // std::bad_alloc, ...) must become one clean JSON error - it must never
+    // take the process or the SSE connection down.
+    svr.set_exception_handler([](const httplib::Request& req, httplib::Response& res,
+                                 std::exception_ptr ep) {
+        std::string what = "naməlum xəta";
+        try {
+            if (ep) std::rethrow_exception(ep);
+        } catch (const std::exception& e) {
+            what = e.what();
+        } catch (...) {
+        }
+        log_error("unhandled exception on " + req.method + " " + req.path + ": " +
+                  what);
+        reply_json(req, res, 500, {{"error", "server xətası: " + what}});
     });
 
     // --- bind + serve in a background thread -------------------------------

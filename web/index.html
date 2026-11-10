@@ -330,7 +330,14 @@ async function ask() {
       body: JSON.stringify({ session_id: sessionId(), message: text }),
       signal: state.abort.signal,
     });
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    if (!resp.ok) {
+      // The server always sends a short Azerbaijani JSON reason; use it when
+      // available instead of a bare status code.
+      let detail = "";
+      try { const j = await resp.json(); detail = j.error || ""; } catch (_) {}
+      throw new Error("HTTP " + resp.status + (detail ? ": " + detail : ""));
+    }
+    if (!resp.body) throw new Error("boş cavab axını");
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -383,9 +390,8 @@ async function ask() {
     clearInterval(state.tick);
     const ph = holder.querySelector(".phase");
     if (ph) ph.remove();
-    const msg = (e && e.name === "AbortError")
-      ? "<i>Cavab dayandırıldı.</i>"
-      : "<b>Xəta:</b> " + esc(String(e.message || e));
+    // Never show the browser's raw "Failed to fetch" / "network error".
+    const msg = friendlyError(e);
     const cur = holder.querySelector(".thinking") ? bubble() : holder.querySelector(".bubble");
     if (cur) cur.innerHTML = msg;
   } finally {
@@ -393,6 +399,20 @@ async function ask() {
     setRunning(false);
     scrollDown();
   }
+}
+
+function friendlyError(e) {
+  if (e && e.name === "AbortError") return "<i>Cavab dayandırıldı.</i>";
+  const m = String((e && e.message) || e || "");
+  if (/Failed to fetch|NetworkError|network error|Load failed|fetch failed/i.test(m))
+    return "<b>Şəbəkə xətası:</b> serverlə əlaqə kəsildi. Bir neçə saniyə sonra yenidən cəhd edin.";
+  if (/HTTP 429|çox sorğu/i.test(m))
+    return "<b>Çox sorğu:</b> qısa bir fasilədən sonra yenidən cəhd edin.";
+  if (/HTTP 5\d\d|server xətası/i.test(m))
+    return "<b>Server xətası:</b> cavab hazırlanarkən problem yarandı. Yenidən cəhd edin.";
+  if (/HTTP 401|API açarı/i.test(m))
+    return "<b>Giriş tələb olunur:</b> API açarı olmadan cavab verilə bilməz.";
+  return "<b>Xəta:</b> " + esc(m || "naməlum xəta");
 }
 
 function setRunning(on) {
