@@ -1054,9 +1054,9 @@ AnswerResult RagPipeline::answer(const std::string& question,
                                gtiming.prompt_tokens, gtiming.eval_tokens,
                                gtiming.done_reason);
                 return trim_count_answer(q, trim_to_last_sentence(
-                    drop_trailing_uncertainty(strip_meta_headers(strip_meta_labels(trim(
-                        strip_clarification_offer(strip_own_sources(
-                            OllamaClient::strip_thinking(raw)))))))));
+                    drop_trailing_uncertainty(strip_meta_headers(strip_bold_markers(
+                        strip_meta_labels(trim(strip_clarification_offer(strip_own_sources(
+                            OllamaClient::strip_thinking(raw))))))))));
             };
             // The vocabulary is built from the agriculture PDFs, so a correct
             // off-domain sentence ("100 gradus Santuslu") scores worse than a
@@ -1066,8 +1066,11 @@ AnswerResult RagPipeline::answer(const std::string& question,
                 if (fc_sentence_count(out) > 3) out = limit_sentences(out, 3);
                 ws = unknown_word_stats(out);
                 subject_ok = subject_mentioned(relevance_key_terms(q), out);
+                // The vocabulary is agriculture-only, so a correct short
+                // off-domain sentence carries a few "unknown" tokens (units,
+                // names). Up to three rare words is not garbling.
                 const bool word_ok =
-                    ws.total == 0 || (ws.unknown <= 3 && ws.total >= 12) ||
+                    ws.total == 0 || ws.unknown <= 3 ||
                     ws.ratio() <= cfg_.garbled_word_ratio_max;
                 return !out.empty() && out.size() >= 12 &&
                        !is_degenerate_answer(out) && word_ok && subject_ok &&

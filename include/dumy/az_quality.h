@@ -517,6 +517,15 @@ inline std::string trim_count_answer(const std::string& question,
     return answer;
 }
 
+// The model sometimes wraps a whole answer in a malformed bold block
+// ("**\nSu 100°C-də qaynayır.\n**"), which then fails the word check. Markdown
+// emphasis carries no meaning here, so drop it before any other cleanup.
+inline std::string strip_bold_markers(std::string s) {
+    size_t p = 0;
+    while ((p = s.find("**", p)) != std::string::npos) s.erase(p, 2);
+    return trim(s);
+}
+
 // A correct short answer followed by "Bu mövzuda dəqiq məlumatım yoxdur" is a
 // contradiction; keep the informative part.
 inline std::string drop_trailing_uncertainty(std::string s) {
