@@ -4,109 +4,170 @@
       "id": "t01_identity",
       "question": "Səni kim yaradıb?",
       "qtype": "identity",
-      "expect_contains": ["DUMY"],
+      "expect_contains": [
+        "DUMY"
+      ],
       "max_seconds": 1.0
     },
     {
       "id": "t02_arith",
       "question": "15 x 12 neçədir?",
-      "expect_contains": ["180"],
-      "expect_not_contains": ["HTTP 400", "exceeds"],
+      "expect_contains": [
+        "180"
+      ],
+      "expect_not_contains": [
+        "HTTP 400",
+        "exceeds"
+      ],
       "max_seconds": 25.0
     },
     {
       "id": "t03_feed_basic",
       "question": "120 baş, gündə 25 kq, 30 gün üçün nə qədər yem lazımdır?",
       "qtype": "calculation",
-      "expect_contains": ["90 000", "120", "25", "30"],
+      "expect_contains": [
+        "90 000",
+        "120",
+        "25",
+        "30"
+      ],
       "max_seconds": 1.0
     },
     {
       "id": "t04_feed_order",
       "question": "Gündə 25 kq yem, 30 günlük dövr, 120 baş mal üçün ümumi yem nə qədərdir?",
       "qtype": "calculation",
-      "expect_contains": ["90 000"],
+      "expect_contains": [
+        "90 000"
+      ],
       "max_seconds": 1.0
     },
     {
       "id": "t05_feed_erzinde",
       "question": "120 baş mal üçün gündə 25 kq, 30 gün ərzində nə qədər yem lazımdır?",
       "qtype": "calculation",
-      "expect_contains": ["90 000"],
+      "expect_contains": [
+        "90 000"
+      ],
       "max_seconds": 1.0
     },
     {
       "id": "t06_feed_ton",
       "question": "120 baş, günlük 25 kq, 30 gün — tonla nə qədər yem lazımdır?",
       "qtype": "calculation",
-      "expect_contains": ["90", "ton"],
+      "expect_contains": [
+        "90",
+        "ton"
+      ],
       "max_seconds": 1.0
     },
     {
       "id": "t07_feed_assumption",
       "question": "120 baş mal üçün 30 günlük yem lazımdır",
       "qtype": "calculation",
-      "expect_contains": ["90 000", "fərz"],
-      "expect_not_contains": ["tapmadım"],
+      "expect_contains": [
+        "90 000",
+        "fərz"
+      ],
+      "expect_not_contains": [
+        "tapmadım"
+      ],
       "max_seconds": 1.0
     },
     {
       "id": "t08_correction",
       "question": "men sabah mekteve gedecem",
       "qtype": "language_task",
-      "expect_contains": ["Mən sabah məktəbə gedəcəyəm"],
+      "expect_contains": [
+        "Mən sabah məktəbə gedəcəyəm"
+      ],
       "max_seconds": 1.0
     },
     {
       "id": "t09_correction2",
       "question": "bu gun hava cox gozeldir",
       "qtype": "language_task",
-      "expect_contains": ["Bu gün hava çox gözəldir"],
+      "expect_contains": [
+        "Bu gün hava çox gözəldir"
+      ],
       "max_seconds": 1.0
     },
     {
       "id": "t10_capital",
       "question": "Azərbaycanın paytaxtı hansı şəhərdir?",
-      "expect_contains": ["Bakı"],
+      "expect_contains": [
+        "Bakı"
+      ],
       "max_seconds": 25.0
     },
     {
       "id": "t11_letters",
       "question": "Azərbaycan əlifbasındakı xüsusi hərfləri sadala",
       "qtype": "language_task",
-      "expect_contains": ["ə", "ı", "ö", "ü", "ç", "ş", "ğ"],
+      "expect_contains": [
+        "ə",
+        "ı",
+        "ö",
+        "ü",
+        "ç",
+        "ş",
+        "ğ"
+      ],
       "max_seconds": 3.0
     },
     {
       "id": "t12_general_foto",
       "question": "Fotosintez nədir?",
-      "expect_contains": ["fotosintez"],
-      "expect_not_contains": ["çuğundur", "süd istehsalı"],
+      "expect_contains": [
+        "fotosintez"
+      ],
+      "expect_not_contains": [
+        "çuğundur",
+        "süd istehsalı"
+      ],
       "max_seconds": 25.0
     },
     {
       "id": "t13_general_pastry",
       "question": "Şəkərçörək necə hazırlanır?",
-      "expect_not_contains": ["çuğundur", "peyvənd", "antibiotik"],
+      "expect_not_contains": [
+        "çuğundur",
+        "peyvənd",
+        "antibiotik"
+      ],
       "max_seconds": 25.0
     },
     {
       "id": "t14_general_phone",
       "question": "Telefon nədir?",
-      "expect_contains": ["telefon"],
-      "expect_not_contains": ["çuğundur", "peyvənd"],
+      "expect_contains": [
+        "telefon"
+      ],
+      "expect_not_contains": [
+        "çuğundur",
+        "peyvənd"
+      ],
       "max_seconds": 25.0
     },
     {
       "id": "t15_oversized",
-      "question": "süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat — bu nədir?",
-      "expect_not_contains": ["HTTP 400", "exceeds", "invalid JSON", "context length"],
-      "max_seconds": 60.0
+      "question": "süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat süd istehsalı və maldarlıq haqqında məlumat bu nədir?",
+      "expect_not_contains": [
+        "HTTP 400",
+        "exceeds",
+        "invalid JSON",
+        "context length"
+      ],
+      "max_seconds": 40.0
     },
     {
       "id": "t16_pdf_diagnosis",
       "question": "Gündəlik süd verimini necə artırmaq olar?",
-      "expect_not_contains": ["HTTP 400", "exceeds", "invalid JSON"],
+      "expect_not_contains": [
+        "HTTP 400",
+        "exceeds",
+        "invalid JSON"
+      ],
       "max_seconds": 30.0
     }
   ]
