@@ -1,7 +1,7 @@
 // web_search.h - key-free web search + page download for the RAG pipeline.
 //
-// Primary source : local SearXNG  (http://localhost:8080/search?q=...&format=json)
-// Fallback       : Wikipedia API (az, ru, en)
+// Primary        : local SearXNG if configured, else DuckDuckGo HTML (no key)
+// Fallback       : Wikipedia API (az, en)
 // Pages are downloaded with libcurl (10 s timeout), stripped with
 // html_cleaner, cached on disk and fetched in parallel through a thread pool.
 #pragma once
@@ -48,6 +48,8 @@ public:
 
 private:
     std::vector<WebResult> search_searxng(const std::string& q) const;
+    std::vector<WebResult> search_ddg(const std::string& q,
+                                      std::string* err = nullptr) const;
     std::vector<WebResult> search_wikipedia(const std::string& q,
                                             const std::string& lang,
                                             std::string* err_out = nullptr) const;

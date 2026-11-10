@@ -9,6 +9,7 @@
 #include <map>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "dumy/common.h"
@@ -27,7 +28,7 @@ size_t write_body(char* ptr, size_t size, size_t nmemb, void* userdata) {
 }
 
 bool http_get(const std::string& url, int timeout_sec, std::string& body,
-              std::string* content_type, std::string* err) {
+              std::string* content_type, std::string* err, long connect_sec = 5) {
     CURL* raw = curl_easy_init();
     if (!raw) {
         if (err) *err = "curl_easy_init failed";
@@ -40,7 +41,7 @@ bool http_get(const std::string& url, int timeout_sec, std::string& body,
     curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, write_body);
     curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &body);
     curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, static_cast<long>(timeout_sec));
-    curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 5L);
+    curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, connect_sec);
     curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl.get(), CURLOPT_MAXREDIRS, 5L);
     curl_easy_setopt(curl.get(), CURLOPT_NOSIGNAL, 1L);
@@ -124,6 +125,64 @@ void cache_write(const Config& cfg, const std::string& prefix, const std::string
                  nlohmann::json payload) {
     payload["fetched_unix"] = now_unix();
     write_text_file(fs::u8path(cache_path(cfg, prefix, key)), payload.dump());
+}
+
+std::string url_decode(const std::string& in) {
+    std::string out;
+    out.reserve(in.size());
+    for (size_t i = 0; i < in.size(); ++i) {
+        if (in[i] == '%' && i + 2 < in.size()) {
+            auto hex = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            const int hi = hex(in[i + 1]), lo = hex(in[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(static_cast<char>(hi * 16 + lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(in[i]);
+    }
+    return out;
+}
+
+std::string ddg_target_url(std::string href) {
+    const std::string marker = "uddg=";
+    const size_t p = href.find(marker);
+    if (p != std::string::npos) {
+        size_t start = p + marker.size();
+        size_t end = href.find('&', start);
+        href = url_decode(href.substr(start, end == std::string::npos
+                                                ? std::string::npos
+                                                : end - start));
+    }
+    while (!href.empty() && href[0] == '/') href.erase(0, 1);
+    if (!starts_with(href, "http")) return "";
+    return href;
+}
+
+std::string strip_tags(const std::string& in) {
+    std::string out;
+    bool in_tag = false;
+    for (char c : in) {
+        if (c == '<') in_tag = true;
+        else if (c == '>') in_tag = false;
+        else if (!in_tag) out.push_back(c);
+    }
+    return trim(html_to_text(out));
+}
+
+std::string attr_value(const std::string& tag, const std::string& name) {
+    const std::string key = name + "=\"";
+    const size_t p = tag.find(key);
+    if (p == std::string::npos) return "";
+    const size_t start = p + key.size();
+    const size_t end = tag.find('"', start);
+    return end == std::string::npos ? "" : tag.substr(start, end - start);
 }
 
 bool looks_like_binary(const std::string& body) {
@@ -282,7 +341,7 @@ std::vector<WebResult> WebSearch::search_wikipedia(const std::string& q,
         body = cached.value("body", std::string());
     } else {
         be_polite(url);
-        bool got = http_get(url, 10, body, nullptr, &err);
+        bool got = http_get(url, cfg_.web_search_timeout_sec, body, nullptr, &err, 1L);
         // Wikipedia rate-limits bursts (HTTP 429): back off twice, then give
         // up for this call - the pipeline continues with PDFs + own knowledge.
         const int backoff_ms[] = {1500, 4000};
@@ -291,7 +350,7 @@ std::vector<WebResult> WebSearch::search_wikipedia(const std::string& q,
             std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms[attempt]));
             be_polite(url);
             err.clear();
-            got = http_get(url, 10, body, nullptr, &err);
+            got = http_get(url, cfg_.web_search_timeout_sec, body, nullptr, &err, 1L);
         }
         if (!got) {
             log_warn("Wikipedia search failed (" + lang + "): " + err);
@@ -322,8 +381,61 @@ std::vector<WebResult> WebSearch::search_wikipedia(const std::string& q,
     return out;
 }
 
+std::vector<WebResult> WebSearch::search_ddg(const std::string& q,
+                                             std::string* err) const {
+    std::vector<WebResult> out;
+    // DuckDuckGo's no-JS endpoint. It needs no key and returns plain HTML;
+    // markup changes are tolerated (a bad parse yields no results, never a
+    // crash), and Wikipedia remains the fallback.
+    const std::string url = "https://html.duckduckgo.com/html/?q=" + url_encode(q) +
+                            "&kl=az-az";
+    std::string body, gerr;
+    be_polite(url);
+    if (!http_get(url, cfg_.web_search_timeout_sec, body, nullptr, &gerr, 1L)) {
+        if (err) *err = "ddg: " + gerr;
+        log_warn("DuckDuckGo search failed: " + gerr);
+        return out;
+    }
+    size_t pos = 0;
+    while (out.size() < static_cast<size_t>(cfg_.web_top_results)) {
+        const size_t a = body.find("result__a", pos);
+        if (a == std::string::npos) break;
+        const size_t tag_end = body.find('>', a);
+        if (tag_end == std::string::npos) break;
+        const size_t tag_start = body.rfind('<', a);
+        if (tag_start == std::string::npos) break;
+        const std::string tag = body.substr(tag_start, tag_end - tag_start);
+        const std::string href = ddg_target_url(attr_value(tag, "href"));
+        const size_t title_end = body.find("</a>", tag_end);
+        if (title_end == std::string::npos) break;
+        const std::string title = strip_tags(body.substr(tag_end + 1, title_end - tag_end - 1));
+        pos = title_end + 4;
+        if (href.empty() || title.empty()) continue;
+
+        WebResult r;
+        r.title = title;
+        r.url = href;
+        r.engine = "ddg";
+        const size_t snip = body.find("result__snippet", pos);
+        const size_t next_result = body.find("result__a", pos);
+        if (snip != std::string::npos && (next_result == std::string::npos || snip < next_result)) {
+            const size_t snip_gt = body.find('>', snip);
+            const size_t snip_end = body.find("</a>", snip_gt);
+            if (snip_gt != std::string::npos && snip_end != std::string::npos)
+                r.snippet = strip_tags(body.substr(snip_gt + 1, snip_end - snip_gt - 1));
+        }
+        out.push_back(std::move(r));
+    }
+    if (out.empty() && err) *err = "ddg: no parsable results";
+    return out;
+}
+
 std::vector<WebResult> WebSearch::search(const std::vector<std::string>& queries,
                                           std::string* err) const {
+    if (cfg_.web_kill_switch) {
+        if (err) *err = "web search disabled by web_kill_switch";
+        return {};
+    }
     std::vector<WebResult> merged;
     std::unordered_set<std::string> seen;
     size_t searx_hits = 0;
@@ -334,6 +446,18 @@ std::vector<WebResult> WebSearch::search(const std::vector<std::string>& queries
         searx_hits += rs.size();
         for (auto& r : rs) {
             if (seen.insert(r.url).second) merged.push_back(std::move(r));
+        }
+    }
+
+    // No local SearXNG (the common case): ask DuckDuckGo's no-JS endpoint.
+    if (merged.empty() && cfg_.web_engine == "ddg") {
+        for (const auto& q : queries) {
+            if (q.empty()) continue;
+            auto rs = search_ddg(q, err);
+            for (auto& r : rs) {
+                if (seen.insert(r.url).second) merged.push_back(std::move(r));
+            }
+            if (!merged.empty()) break;
         }
     }
 

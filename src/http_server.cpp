@@ -16,6 +16,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <thread>
 
@@ -25,15 +26,36 @@
 namespace dumy {
 namespace {
 
-void apply_cors(httplib::Response& res) {
-    res.set_header("Access-Control-Allow-Origin", "*");
-    res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.set_header("Access-Control-Allow-Headers", "Content-Type");
+// Set once in HttpServer::start; used by the CORS helpers below.
+const Config* g_cfg = nullptr;
+
+// Reflecting only an allow-listed Origin (and never "*") keeps a website that
+// embeds DUMY from being callable by every other page in the browser.
+std::string cors_origin(const httplib::Request& req) {
+    if (!g_cfg) return "";
+    const std::string origin = req.get_header_value("Origin");
+    if (origin.empty()) return "";
+    for (const auto& allowed : g_cfg->allowed_origins) {
+        if (allowed == "*" || allowed == origin) return origin;
+    }
+    return "";
 }
 
-void reply_json(httplib::Response& res, int status, const nlohmann::json& body) {
-    apply_cors(res);
+void apply_cors(const httplib::Request& req, httplib::Response& res) {
+    const std::string origin = cors_origin(req);
+    if (!origin.empty()) {
+        res.set_header("Access-Control-Allow-Origin", origin);
+        res.set_header("Vary", "Origin");
+        res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        res.set_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key");
+    }
+}
+
+void reply_json(const httplib::Request& req, httplib::Response& res, int status,
+                const nlohmann::json& body) {
+    apply_cors(req, res);
     res.status = status;
+    res.set_header("Cache-Control", "no-store");
     res.set_content(body.dump(), "application/json; charset=utf-8");
 }
 
@@ -43,7 +65,7 @@ bool parse_body(const httplib::Request& req, httplib::Response& res, nlohmann::j
         out = nlohmann::json::parse(req.body.empty() ? "{}" : req.body);
         return true;
     } catch (const std::exception& e) {
-        reply_json(res, 400, {{"error", std::string("invalid JSON body: ") + e.what()}});
+        reply_json(req, res, 400, {{"error", std::string("invalid JSON body: ") + e.what()}});
         return false;
     }
 }
@@ -62,6 +84,56 @@ constexpr const char* FALLBACK_HTML =
 bool is_loopback(const std::string& addr) {
     return addr == "127.0.0.1" || addr == "::1" || addr == "localhost" ||
            starts_with(addr, "127.");
+}
+
+// --- API key, per-IP rate limit and request limits ------------------------
+std::mutex& rate_mutex() {
+    static std::mutex m;
+    return m;
+}
+struct RateEntry {
+    std::chrono::steady_clock::time_point window{};
+    int count = 0;
+};
+std::map<std::string, RateEntry>& rate_map() {
+    static std::map<std::string, RateEntry> m;
+    return m;
+}
+
+// Fixed one-minute window per IP; it only has to stop accidental floods and
+// a single abusive client, not bill anyone, so a simple map is enough.
+bool rate_limited(const std::string& ip, int per_minute) {
+    if (per_minute <= 0) return false;
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lk(rate_mutex());
+    auto& e = rate_map()[ip];
+    if (e.window.time_since_epoch().count() == 0 ||
+        now - e.window > std::chrono::seconds(60)) {
+        e.window = now;
+        e.count = 0;
+    }
+    return ++e.count > per_minute;
+}
+
+bool check_api_access(const httplib::Request& req, httplib::Response& res,
+                      bool apply_rate_limit) {
+    if (!g_cfg) return true;
+    if (!g_cfg->api_key.empty() &&
+        req.get_header_value("X-API-Key") != g_cfg->api_key) {
+        reply_json(req, res, 401,
+                   {{"error", "API açarı tələb olunur (X-API-Key başlığı)"}});
+        return false;
+    }
+    if (apply_rate_limit &&
+        rate_limited(req.remote_addr, g_cfg->rate_limit_per_minute)) {
+        res.set_header("Retry-After", "60");
+        reply_json(req, res, 429,
+                   {{"error", "çox sorğu - dəqiqədə " +
+                                  std::to_string(g_cfg->rate_limit_per_minute) +
+                                  " sorğu limiti"}});
+        return false;
+    }
+    return true;
 }
 
 // Turns an arbitrary uploaded filename into something safe inside pdfs/:
@@ -108,6 +180,7 @@ HttpServer::HttpServer(const Config& cfg, RagPipeline& pipeline, Indexer& indexe
 
 bool HttpServer::start(std::string* err) {
     auto& svr = impl_->svr;
+    g_cfg = &cfg_;
     // Uploads can be large PDFs; chat/JSON bodies stay small.
     svr.set_payload_max_length(static_cast<size_t>(cfg_.upload_max_mb) * 1024 * 1024 +
                                1024 * 1024);
@@ -120,15 +193,15 @@ bool HttpServer::start(std::string* err) {
     // --- CORS preflight ----------------------------------------------------
     for (const char* path : {"/", "/chat", "/chat/stream", "/ingest", "/health",
                              "/documents", "/upload"}) {
-        svr.Options(path, [](const httplib::Request&, httplib::Response& res) {
-            apply_cors(res);
+        svr.Options(path, [](const httplib::Request& req, httplib::Response& res) {
+            apply_cors(req, res);
             res.status = 204;
         });
     }
 
     // --- GET / : browser chat UI ------------------------------------------
-    svr.Get("/", [index_html](const httplib::Request&, httplib::Response& res) {
-        apply_cors(res);
+    svr.Get("/", [index_html](const httplib::Request& req, httplib::Response& res) {
+        apply_cors(req, res);
         std::string html;
         if (read_text_file(index_html, html) && !html.empty()) {
             res.set_content(html, "text/html; charset=utf-8");
@@ -138,7 +211,7 @@ bool HttpServer::start(std::string* err) {
     });
 
     // --- GET /health -------------------------------------------------------
-    svr.Get("/health", [this](const httplib::Request&, httplib::Response& res) {
+    svr.Get("/health", [this](const httplib::Request& req, httplib::Response& res) {
         // Live Ollama probe with a hard 2 s cap (cached 5 s) so the status
         // badge can never hang the page when Ollama is down or busy.
         bool alive;
@@ -186,21 +259,35 @@ bool HttpServer::start(std::string* err) {
                         {"embed_load_ms", w.embed_load_ms},
                         {"note", w.note}}},
         };
-        reply_json(res, 200, body);
+        reply_json(req, res, 200, body);
     });
 
     // --- GET /documents ----------------------------------------------------
-    svr.Get("/documents", [this](const httplib::Request&, httplib::Response& res) {
-        reply_json(res, 200, {{"documents", indexer_.documents_json()}});
+    svr.Get("/documents", [this](const httplib::Request& req, httplib::Response& res) {
+        reply_json(req, res, 200, {{"documents", indexer_.documents_json()}});
     });
 
     // --- POST /chat --------------------------------------------------------
     svr.Post("/chat", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!check_api_access(req, res, true)) return;
+        if (req.body.size() >
+            static_cast<size_t>(std::max(8, cfg_.max_body_kb)) * 1024) {
+            reply_json(req, res, 413, {{"error", "sorğu gövdəsi çox böyükdür"}});
+            return;
+        }
         nlohmann::json body;
         if (!parse_body(req, res, body)) return;
         const std::string message = body.value("message", std::string());
         if (trim(message).empty()) {
-            reply_json(res, 400, {{"error", "'message' is required"}});
+            reply_json(req, res, 400, {{"error", "'message' is required"}});
+            return;
+        }
+        if (message.size() >
+            static_cast<size_t>(std::max(50, cfg_.max_question_chars))) {
+            reply_json(req, res, 413,
+                       {{"error", "sual çox uzundur (max " +
+                                      std::to_string(cfg_.max_question_chars) +
+                                      " simvol)"}});
             return;
         }
         std::string session_id = body.value("session_id", std::string());
@@ -208,7 +295,7 @@ bool HttpServer::start(std::string* err) {
 
         try {
             AnswerResult r = pipeline_.answer(message, session_id, nullptr);
-            reply_json(res, 200,
+            reply_json(req, res, 200,
                        {{"session_id", session_id},
                         {"answer", r.answer},
                         {"sources", r.sources_json()},
@@ -221,23 +308,37 @@ bool HttpServer::start(std::string* err) {
                         {"self_check_retries", r.self_check_retries},
                         {"warning", r.warning}});
         } catch (const std::exception& e) {
-            reply_json(res, 500, {{"error", std::string("pipeline error: ") + e.what()}});
+            reply_json(req, res, 500, {{"error", std::string("pipeline error: ") + e.what()}});
         }
     });
 
     // --- POST /chat/stream (SSE) ------------------------------------------
     svr.Post("/chat/stream", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!check_api_access(req, res, true)) return;
+        if (req.body.size() >
+            static_cast<size_t>(std::max(8, cfg_.max_body_kb)) * 1024) {
+            reply_json(req, res, 413, {{"error", "sorğu gövdəsi çox böyükdür"}});
+            return;
+        }
         nlohmann::json body;
         if (!parse_body(req, res, body)) return;
         const std::string message = body.value("message", std::string());
         if (trim(message).empty()) {
-            reply_json(res, 400, {{"error", "'message' is required"}});
+            reply_json(req, res, 400, {{"error", "'message' is required"}});
+            return;
+        }
+        if (message.size() >
+            static_cast<size_t>(std::max(50, cfg_.max_question_chars))) {
+            reply_json(req, res, 413,
+                       {{"error", "sual çox uzundur (max " +
+                                      std::to_string(cfg_.max_question_chars) +
+                                      " simvol)"}});
             return;
         }
         std::string session_id = body.value("session_id", std::string());
         if (session_id.empty()) session_id = SessionManager::make_session_id();
 
-        apply_cors(res);
+        apply_cors(req, res);
         res.set_header("Cache-Control", "no-cache");
         res.set_header("Connection", "keep-alive");
         res.status = 200;
@@ -302,13 +403,20 @@ bool HttpServer::start(std::string* err) {
 
     // --- POST /ingest ------------------------------------------------------
     svr.Post("/ingest", [this](const httplib::Request& req, httplib::Response& res) {
+        // Reindexing is an administrative action: localhost only, even when an
+        // API key is configured.
+        if (!is_loopback(req.remote_addr)) {
+            reply_json(req, res, 403, {{"error", "ingest yalnız localhost-dandır"}});
+            return;
+        }
+        if (!check_api_access(req, res, false)) return;
         nlohmann::json body;
         if (!parse_body(req, res, body)) return;
         const bool force = body.value("force", false);
         // Only one ingest at a time; a second call gets 409 (the UI shows it).
         bool expected = false;
         if (!impl_->ingest_running.compare_exchange_strong(expected, true)) {
-            reply_json(res, 409,
+            reply_json(req, res, 409,
                        {{"error", "ingest artıq işləyir - bitməsini gözləyin"}});
             return;
         }
@@ -318,7 +426,7 @@ bool HttpServer::start(std::string* err) {
         } guard{impl_->ingest_running};
         try {
             Indexer::Report rep = indexer_.ingest(force);
-            reply_json(res, rep.ok ? 200 : 500,
+            reply_json(req, res, rep.ok ? 200 : 500,
                        {{"status", rep.ok ? "ok" : "partial_error"},
                         {"files_seen", rep.files_seen},
                         {"files_indexed", rep.files_indexed},
@@ -330,38 +438,38 @@ bool HttpServer::start(std::string* err) {
                         {"scanned_pages", rep.scanned_pages},
                         {"message", rep.message}});
         } catch (const std::exception& e) {
-            reply_json(res, 500, {{"error", std::string("ingest error: ") + e.what()}});
+            reply_json(req, res, 500, {{"error", std::string("ingest error: ") + e.what()}});
         }
     });
 
     // --- POST /upload (multipart PDF) --------------------------------------
     svr.Post("/upload", [this](const httplib::Request& req, httplib::Response& res) {
-        if (!cfg_.allow_upload_from_remote && !is_loopback(req.remote_addr)) {
-            reply_json(res, 403,
+        if (!is_loopback(req.remote_addr)) {
+            reply_json(req, res, 403,
                        {{"error", "upload yalnız localhost-dan icazəlidir "
                                   "(config.json: allow_upload_from_remote)"}});
             return;
         }
         // cpp-httplib 0.59: multipart files live in req.form.
         if (!req.form.has_file("file")) {
-            reply_json(res, 400, {{"error", "multipart field 'file' is required"}});
+            reply_json(req, res, 400, {{"error", "multipart field 'file' is required"}});
             return;
         }
         const httplib::FormData file = req.form.get_file("file");
         if (file.content.empty()) {
-            reply_json(res, 400, {{"error", "empty file"}});
+            reply_json(req, res, 400, {{"error", "empty file"}});
             return;
         }
         if (file.content.size() >
             static_cast<size_t>(cfg_.upload_max_mb) * 1024 * 1024) {
-            reply_json(res, 413,
+            reply_json(req, res, 413,
                        {{"error", "file too large (max " +
                                       std::to_string(cfg_.upload_max_mb) + " MB)"}});
             return;
         }
         // Basic magic-byte check: real PDFs start with %PDF.
         if (file.content.compare(0, 4, "%PDF") != 0) {
-            reply_json(res, 400, {{"error", "not a PDF file (missing %PDF header)"}});
+            reply_json(req, res, 400, {{"error", "not a PDF file (missing %PDF header)"}});
             return;
         }
 
@@ -386,7 +494,7 @@ bool HttpServer::start(std::string* err) {
             std::ofstream out(fs::u8path(dest.u8string()),
                               std::ios::binary | std::ios::trunc);
             if (!out) {
-                reply_json(res, 500,
+                reply_json(req, res, 500,
                            {{"error", "cannot write into " + cfg_.pdf_folder}});
                 return;
             }
@@ -395,7 +503,7 @@ bool HttpServer::start(std::string* err) {
         }
         log_info("Uploaded PDF: " + safe + " (" +
                  std::to_string(file.content.size() / 1024) + " KB)");
-        reply_json(res, 200,
+        reply_json(req, res, 200,
                    {{"status", "ok"},
                     {"file", safe},
                     {"size", file.content.size()},
@@ -410,7 +518,7 @@ bool HttpServer::start(std::string* err) {
     // handler exception shows up as 500, not a fake 404. Everything is
     // logged so sporadic routing problems can be diagnosed.
     svr.set_error_handler([](const httplib::Request& req, httplib::Response& res) {
-        apply_cors(res);
+        apply_cors(req, res);
         if (!res.body.empty()) return;  // handler already replied with a reason
         const int code = (res.status >= 400) ? res.status : 500;
         res.status = code;
