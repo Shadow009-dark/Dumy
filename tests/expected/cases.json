@@ -162,6 +162,7 @@
     {
       "id": "t16_pdf_diagnosis",
       "question": "Gündəlik süd verimini necə artırmaq olar?",
+      "min_pdf_sources": 1,
       "expect_not_contains": [
         "HTTP 400",
         "exceeds",

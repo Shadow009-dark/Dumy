@@ -6,7 +6,8 @@ directly. Put a tunnel or reverse proxy in front of it and keep the API key on.
 ## 1. Build and start
 
 ```powershell
-cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="C:/Program Files/Microsoft Visual Studio/18/Community/VC/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_INSTALLED_DIR="C:/Users/Shadow/Desktop/dumy/build/vcpkg_installed" -DDUMY_WITH_POPPLER=ON
+$env:VCPKG_ROOT = "C:/vcpkg"   # your vcpkg checkout, wherever it lives
+cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_INSTALLED_DIR="$PWD/build/vcpkg_installed" -DDUMY_WITH_POPPLER=ON
 cmake --build build --config Release --target dumy
 .\start_dumy.bat
 ```
