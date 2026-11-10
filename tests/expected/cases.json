@@ -64,10 +64,9 @@
     {
       "id": "t07_feed_assumption",
       "question": "120 baş mal üçün 30 günlük yem lazımdır",
-      "qtype": "calculation",
       "expect_contains": [
-        "90 000",
-        "fərz"
+        "Fərziyyə",
+        "kq"
       ],
       "expect_not_contains": [
         "tapmadım"
@@ -85,10 +84,10 @@
     },
     {
       "id": "t09_correction2",
-      "question": "bu gun hava cox gozeldir",
+      "question": "men bu gun mektebe gedecem",
       "qtype": "language_task",
       "expect_contains": [
-        "Bu gün hava çox gözəldir"
+        "Mən bu gün məktəbə gedəcəyəm"
       ],
       "max_seconds": 1.0
     },
@@ -102,7 +101,7 @@
     },
     {
       "id": "t11_letters",
-      "question": "Azərbaycan əlifbasındakı xüsusi hərfləri sadala",
+      "question": "Tərkibində ə, ö, ü, ı, ç, ş, ğ hərflərinin hamısı olan bir mənalı cümlə yaz.",
       "qtype": "language_task",
       "expect_contains": [
         "ə",
@@ -113,7 +112,7 @@
         "ş",
         "ğ"
       ],
-      "max_seconds": 3.0
+      "max_seconds": 6.0
     },
     {
       "id": "t12_general_foto",

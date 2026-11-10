@@ -357,10 +357,15 @@ inline Inputs parse_inputs(const std::string& question) {
             continue;
         }
         if (is_kg_unit(next) || (next == "/" && is_kg_unit(next2))) {
-            const bool per_day = starts(prev, "gunde") || starts(prev, "gundelik") ||
-                                 starts(prev2, "gunde") || (prev == "her" && starts(prev2, "gun")) ||
-                                 (next2 == "gun" || next2 == "gunde") ||
-                                 (i + 3 < tok.size() && starts(tok[i + 3], "gunde"));
+            // "gündə", "günlük", "gün ərzində", "hər gün" and the same words
+            // AFTER the number ("25 kq günlük") all mean per-head per-day.
+            const bool per_day =
+                starts(prev, "gunde") || starts(prev, "gundelik") ||
+                starts(prev, "gunluk") || starts(prev2, "gunde") ||
+                (starts(prev2, "gun") && starts(prev, "erzinde")) ||
+                (prev == "her" && starts(prev2, "gun")) ||
+                (next2 == "gun" || next2 == "gunde" || next2 == "gunluk") ||
+                (i + 3 < tok.size() && starts(tok[i + 3], "gunde"));
             if (per_day) {
                 in.daily = v;
                 in.daily_given = true;

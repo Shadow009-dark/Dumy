@@ -115,6 +115,13 @@ bool rate_limited(const std::string& ip, int per_minute) {
     return ++e.count > per_minute;
 }
 
+size_t utf8_chars(const std::string& s) {
+    size_t n = 0;
+    for (unsigned char c : s)
+        if ((c & 0xC0) != 0x80) ++n;
+    return n;
+}
+
 bool check_api_access(const httplib::Request& req, httplib::Response& res,
                       bool apply_rate_limit) {
     if (!g_cfg) return true;
@@ -282,7 +289,7 @@ bool HttpServer::start(std::string* err) {
             reply_json(req, res, 400, {{"error", "'message' is required"}});
             return;
         }
-        if (message.size() >
+        if (utf8_chars(message) >
             static_cast<size_t>(std::max(50, cfg_.max_question_chars))) {
             reply_json(req, res, 413,
                        {{"error", "sual çox uzundur (max " +
@@ -327,7 +334,7 @@ bool HttpServer::start(std::string* err) {
             reply_json(req, res, 400, {{"error", "'message' is required"}});
             return;
         }
-        if (message.size() >
+        if (utf8_chars(message) >
             static_cast<size_t>(std::max(50, cfg_.max_question_chars))) {
             reply_json(req, res, 413,
                        {{"error", "sual çox uzundur (max " +

@@ -50,12 +50,15 @@ foreach ($c in $cases) {
     $payload = @{ session_id = 'suite-' + $c.id; message = $c.question } | ConvertTo-Json -Compress
     [IO.File]::WriteAllText($payloadPath, $payload, (New-Object System.Text.UTF8Encoding($false)))
 
+    $respPath = Join-Path $tmpDir ($c.id + '.response.json')
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $raw = & curl.exe -s -m 90 -H 'Content-Type: application/json; charset=utf-8' --data-binary "@$payloadPath" $chatUrl
+    $httpCode = & curl.exe -s -m 90 -o $respPath -w '%{http_code}' -H 'Content-Type: application/json; charset=utf-8' --data-binary "@$payloadPath" $chatUrl
     $sw.Stop()
+    $raw = [IO.File]::ReadAllText($respPath, [Text.Encoding]::UTF8)
     $seconds = [math]::Round($sw.Elapsed.TotalSeconds, 2)
 
     $problems = New-Object System.Collections.Generic.List[string]
+    if ([string]$httpCode -ne '200') { $problems.Add("HTTP $httpCode") | Out-Null }
     $answer = ''
     $qtype = ''
     try {
@@ -72,10 +75,10 @@ foreach ($c in $cases) {
     }
     if ($c.qtype -and $qtype -ne $c.qtype) { $problems.Add("qtype $qtype != $($c.qtype)") | Out-Null }
     foreach ($needle in @($c.expect_contains)) {
-        if ($needle -and -not $answer.Contains($needle)) { $problems.Add("missing: $needle") | Out-Null }
+        if ($needle -and $answer.IndexOf([string]$needle, [StringComparison]::OrdinalIgnoreCase) -lt 0) { $problems.Add("missing: $needle") | Out-Null }
     }
     foreach ($needle in @($c.expect_not_contains)) {
-        if ($needle -and $answer.Contains($needle)) { $problems.Add("unexpected: $needle") | Out-Null }
+        if ($needle -and $answer.IndexOf([string]$needle, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $problems.Add("unexpected: $needle") | Out-Null }
     }
     if ($answer -match '(?i)(\b\p{L}+\b)(\s+\1){4,}') { $problems.Add('repetition loop') | Out-Null }
     if ($seconds -gt [double]$c.max_seconds) { $problems.Add("slow: ${seconds}s > $($c.max_seconds)s") | Out-Null }
