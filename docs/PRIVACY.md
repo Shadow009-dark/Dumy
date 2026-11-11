@@ -52,6 +52,15 @@ token əlavə edir. Yaddaş yalnız ümumi (PDF-siz) cavab promptuna düşür:
 fakt-yoxlama və PDF retrieval promptlarına heç vaxt əlavə olunmur, ona görə
 yaddaş mətni heç vaxt `[Mənbə: ...]` kimi göstərilmir.
 
+## Səslə yazı (mikrofon)
+
+* Səs tanıma **brauzerin öz xidməti** ilə işləyir (Web Speech API) və **internet tələb edir**.
+* Audio DUMY serverinə göndərilmir, diskdə saxlanmır və loglara yazılmır; yalnız tanınmış mətn
+  adi sorğu kimi `/chat`-ə gedir.
+* Mikrofon düyməsi yalnız brauzer dəstəkləyəndə aktivdir; icazə verilməsə, heç bir səs göndərilmir.
+* «Cavabı səsləndir» yalnız sistemdə Azərbaycan dili (`az`) səsi quraşdırılıbsa görünür; başqa
+  dilli səs Azərbaycan mətnini oxumaq üçün istifadə olunmur.
+
 ## Yedəkləmə
 
 Bütün yaddaş `data/memory/` qovluğundadır. Kopyalamaq üçün serveri dayandırın

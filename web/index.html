@@ -252,6 +252,9 @@
   .btn-row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 
   .chip.pdf { cursor: pointer; }
+  .mic.listening { color: #08130c; background: var(--accent); animation: micpulse 1.4s ease-in-out infinite; }
+  .mic[disabled] { opacity: 0.45; cursor: not-allowed; }
+  @keyframes micpulse { 0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft); } 50% { box-shadow: 0 0 0 8px transparent; } }
   .chip.safety { border-color: color-mix(in srgb, var(--earth) 55%, var(--border)); color: var(--earth); }
   .snippet-pop {
     position: absolute; z-index: 60; width: min(320px, calc(100vw - 24px));
@@ -361,6 +364,9 @@
     <form class="composer" id="composer" autocomplete="off">
       <label class="sr-only" for="input">Sualınız</label>
       <textarea id="input" rows="1" placeholder="Sualınızı yazın… (Enter — göndər, Shift+Enter — yeni sətir)" maxlength="2000"></textarea>
+      <button class="icon-btn mic" id="mic" type="button" aria-label="Səslə yaz" aria-pressed="false" title="Səslə yaz (Ctrl+Shift+M) — səs tanıma brauzerin xidməti ilə işləyir və internet tələb edir" disabled>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>
+      </button>
       <button class="send" id="send" type="submit" aria-label="Göndər">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
       </button>
@@ -401,6 +407,15 @@
       <button class="btn" id="clear-key" type="button">Sil</button>
       <button class="btn primary" id="save-key" type="button">Yadda saxla</button>
     </div>
+    <div class="switch-row">
+      <label for="voice-autosend">Səsdən sonra avtomatik göndər</label>
+      <span class="switch"><input type="checkbox" id="voice-autosend"><span aria-hidden="true"></span></span>
+    </div>
+    <div class="switch-row" id="tts-row" hidden>
+      <label for="tts-toggle">Cavabı səsləndir</label>
+      <span class="switch"><input type="checkbox" id="tts-toggle"><span aria-hidden="true"></span></span>
+    </div>
+    <p>Səs tanıma brauzerin xidməti ilə işləyir və internet tələb edir. Audio DUMY serverinə göndərilmir və heç yerdə saxlanmır.</p>
   </div>
 </dialog>
 
@@ -429,13 +444,14 @@
     comparison: "Müqayisə", code_request: "İmtina", refusal: "İmtina"
   };
 
+  // Fallback chips; the live list comes from GET /config (welcome_examples).
   var EXAMPLES = [
-    { q: "120 baş mal-qaranın 30 günlük yemi nə qədərdir?", tag: "Hesablama" },
-    { q: "men sabah mekteve gedecem", tag: "Cümlə düzəlişi" },
-    { q: "Bu gün hansı gündür?", tag: "Tarix" },
-    { q: "15 x 12 neçədir?", tag: "Riyaziyyat" },
-    { q: "İnəklərdə mastit necə müalicə olunur?", tag: "Heyvandarlıq" },
-    { q: "Qoyunlarda qarın şişkinliyi niyə olur?", tag: "Diaqnoz" }
+    { q: "120 baş mal-qaranın 30 günlük yemi nə qədərdir?", tag: "Yem hesablaması" },
+    { q: "20 baş dana üçün 45 günlük yem hesablayın.", tag: "Rasion hesabı" },
+    { q: "Mal-qarada qarayara xəstəliyinin əlamətləri nələrdir?", tag: "Mal-qara sağlamlığı" },
+    { q: "Sağım zamanı hansı gigiyena qaydalarına riayət etmək lazımdır?", tag: "Südçülük" },
+    { q: "Şirəli yem bitkiləri hansılardır?", tag: "Aqronomiya" },
+    { q: "50 baş qoyunun gündəlik yem norması nə qədərdir?", tag: "Yem hesablaması" }
   ];
 
   // ------------------------------------------------------------- storage
@@ -961,6 +977,7 @@
       if (stopped && !textOut) textOut = "Dayandırıldı.";
       holder.body.replaceChildren();
       renderRich(holder.body, textOut);
+      if (!stopped) speakAnswer(textOut);
 
       var msg = {
         role: "assistant",
@@ -1105,18 +1122,159 @@
   }
 
   // --------------------------------------------------------------- init
-  function boot() {
-    applyTheme(store("dumy_theme") || "dark");
-
-    var examples = $("examples");
+  function renderExamples() {
+    var box = $("examples");
+    box.replaceChildren();
     EXAMPLES.forEach(function (ex) {
       var b = el("button", "example");
       b.type = "button";
       b.appendChild(document.createTextNode(ex.q));
       b.appendChild(el("span", null, ex.tag));
       b.addEventListener("click", function () { sendMessage(ex.q); });
-      examples.appendChild(b);
+      box.appendChild(b);
     });
+  }
+
+  // Chips come from config.json (GET /config); the built-in list is the
+  // fallback when the endpoint or the config entry is missing.
+  function loadWelcomeExamples() {
+    api("/config").then(function (cfg) {
+      if (cfg && cfg.welcome_examples && cfg.welcome_examples.length) {
+        EXAMPLES = cfg.welcome_examples
+          .filter(function (e) { return e && e.text; })
+          .map(function (e) { return { q: String(e.text), tag: String(e.label || "") }; });
+      }
+    }).catch(function () { /* keep the fallback */ })
+      .then(renderExamples);
+  }
+
+  // ---------------- voice input (browser Web Speech API only) ------------
+  var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var voice = { rec: null, listening: false, base: "", finalText: "" };
+
+  function voiceMessage(text) { showBanner(text); }
+
+  function toggleMic() {
+    if (voice.listening) {
+      try { voice.rec.stop(); } catch (e) {}
+      return;
+    }
+    if (state.streaming) return;
+    try {
+      var rec = new SpeechRec();
+      rec.lang = "az-AZ";
+      rec.interimResults = true;
+      rec.continuous = false;
+      rec.maxAlternatives = 1;
+      voice.base = $("input").value.trim();
+      voice.finalText = "";
+      rec.onstart = function () {
+        voice.listening = true;
+        $("mic").classList.add("listening");
+        $("mic").setAttribute("aria-pressed", "true");
+        $("hint-status").textContent = "Dinləyirəm…";
+      };
+      rec.onresult = function (ev) {
+        var interim = "";
+        for (var i = ev.resultIndex; i < ev.results.length; i++) {
+          var r = ev.results[i];
+          if (r.isFinal) voice.finalText += r[0].transcript;
+          else interim += r[0].transcript;
+        }
+        var text = (voice.base ? voice.base + " " : "") + voice.finalText + interim;
+        $("input").value = text.trim();
+        autoGrow();
+      };
+      rec.onerror = function (ev) {
+        var code = ev.error || "";
+        if (code === "aborted") return;
+        if (code === "not-allowed" || code === "service-not-allowed")
+          voiceMessage("Mikrofona icazə verilmədi. Brauzer ayarlarından mikrofona icazə verin.");
+        else if (code === "no-speech")
+          voiceMessage("Səs eşitmədim. Yenidən cəhd edin.");
+        else if (code === "network")
+          voiceMessage("Səs tanıma üçün internet lazımdır.");
+        else
+          voiceMessage("Səsi tanımaq alınmadı. Yenidən cəhd edin.");
+      };
+      rec.onend = function () {
+        voice.listening = false;
+        $("mic").classList.remove("listening");
+        $("mic").setAttribute("aria-pressed", "false");
+        $("hint-status").textContent = "";
+        var text = $("input").value.trim();
+        if (store("dumy_voice_autosend") === "1" && text) sendMessage(text);
+      };
+      voice.rec = rec;
+      rec.start();
+    } catch (e) {
+      voiceMessage("Səslə yazını başlatmaq alınmadı. Yenidən cəhd edin.");
+    }
+  }
+
+  function setupTts() {
+    if (!window.speechSynthesis) return;
+    function azVoice() {
+      var vs = window.speechSynthesis.getVoices() || [];
+      for (var i = 0; i < vs.length; i++)
+        if ((vs[i].lang || "").toLowerCase().indexOf("az") === 0) return vs[i];
+      return null;
+    }
+    function refresh() {
+      if (!azVoice()) { $("tts-row").hidden = true; return; }
+      $("tts-row").hidden = false;
+      $("tts-toggle").checked = store("dumy_tts") === "1";
+    }
+    refresh();
+    window.speechSynthesis.onvoiceschanged = refresh;
+    $("tts-toggle").addEventListener("change", function () {
+      store("dumy_tts", $("tts-toggle").checked ? "1" : "0");
+    });
+  }
+
+  function speakAnswer(text) {
+    if (!window.speechSynthesis || store("dumy_tts") !== "1") return;
+    var vs = window.speechSynthesis.getVoices() || [];
+    var az = null;
+    for (var i = 0; i < vs.length; i++)
+      if ((vs[i].lang || "").toLowerCase().indexOf("az") === 0) { az = vs[i]; break; }
+    if (!az) return;  // never read Azerbaijani with a Turkish/other voice
+    var u = new SpeechSynthesisUtterance(String(text).slice(0, 1200));
+    u.lang = az.lang;
+    u.voice = az;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+  }
+
+  function setupVoice() {
+    var mic = $("mic");
+    var auto = $("voice-autosend");
+    auto.checked = store("dumy_voice_autosend") === "1";
+    auto.addEventListener("change", function () {
+      store("dumy_voice_autosend", auto.checked ? "1" : "0");
+    });
+    if (!SpeechRec) {
+      mic.disabled = true;
+      mic.title = "Bu brauzer səslə yazını dəstəkləmir, Chrome və ya Edge istifadə edin";
+      mic.setAttribute("aria-label", mic.title);
+      return;
+    }
+    mic.disabled = false;
+    mic.addEventListener("click", toggleMic);
+    document.addEventListener("keydown", function (ev) {
+      if (ev.ctrlKey && ev.shiftKey && ev.key.toLowerCase() === "m") {
+        ev.preventDefault();
+        toggleMic();
+      }
+    });
+    setupTts();
+  }
+
+  function boot() {
+    applyTheme(store("dumy_theme") || "dark");
+    setupVoice();
+
+    loadWelcomeExamples();
     $("welcome").style.display = "";
 
     $("new-chat").addEventListener("click", function () { newConversation(false); });
