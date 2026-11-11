@@ -192,10 +192,8 @@ inline bool looks_like_bare_sentence(const std::string& original,
 inline std::string build_sentence_correction_prompt(const std::string& sentence) {
     return "Aşağıdakı cümlədə Azərbaycan hərfləri (ə, ö, ü, ı, ç, ş, ğ) yoxdur və "
            "bəzi sözlər səhv yazılıb. Cümləni düzgün Azərbaycan dilində yaz. "
-           "Yalnız düzəldilmiş cümləni yaz; ondan sonra yeni sətirdə qısa bir "
-           "sətirlə əsas dəyişikliyi göstər (məsələn: \"Dəyişiklik: hərflər və "
-           "söz formaları bərpa edildi.\"). Əlavə sual, giriş sözü və mənbə "
-           "etiketi YAZMA.\n\nCÜMLƏ: " + sentence;
+           "YALNIZ düzəldilmiş cümləni yaz. İzah, \"Dəyişiklik:\" sətri, giriş "
+           "sözü, təkrarlanan sual və mənbə etiketi YAZMA.\n\nCÜMLƏ: " + sentence;
 }
 
 // "men sabah mekteve gedecem" -> "Mən sabah məktəbə gedəcəyəm."
@@ -204,7 +202,7 @@ inline std::string deterministic_sentence_correction(const std::string& original
     if (s.empty()) return s;
     s = az_upper_first(s);
     if (s.back() != '.' && s.back() != '!' && s.back() != '?') s += '.';
-    return s + "\n\nDəyişiklik: hərflər (ə, ö, ü, ı, ç, ş, ğ) və söz formaları bərpa edildi.";
+    return s;  // the answer is the corrected sentence, nothing else
 }
 
 // ---------------------------------------------------------------------------
@@ -977,20 +975,111 @@ inline std::string build_feed_calculation_answer(const std::string& question) {
     const double total = daily * static_cast<double>(in.days) *
                          static_cast<double>(in.heads);
     std::ostringstream os;
-    os << "Hesablama [Ümumi bilik]:\n"
-       << "- Baş sayı: " << feed_detail::fmt(in.heads) << " baş\n"
-       << "- Gündəlik yem: " << feed_detail::kg(daily) << " kq/baş\n"
-       << "- Dövr: " << feed_detail::fmt(in.days) << " gün\n";
-    if (assumed) os << assumption_line;
-    os << "\nNəticə: " << feed_detail::fmt(in.heads) << " × " << feed_detail::kg(daily)
+    // Formula + result only. When a value was missing, one short assumption
+    // clause travels with it (it is part of the answer, not a note).
+    os << "Nəticə: " << feed_detail::fmt(in.heads) << " × " << feed_detail::kg(daily)
        << " × " << feed_detail::fmt(in.days) << " = " << feed_detail::kg(total)
        << " kq";
     if (total >= 1000.0)
         os << " (" << feed_detail::kg(total / 1000.0) << " ton)";
-    os << ".\n";
-    os << (assumed ? "Qeyd: fərziyyə ilə götürülən rəqəmlər sənədə istinad etmir."
-                   : "Qeyd: bütün rəqəmlər sualdan götürülüb.");
+    os << ".";
+    if (assumed) {
+        os << "\nFərziyyə: canlı çəki "
+           << feed_detail::kg(in.weight_given ? in.weight : 300.0)
+           << " kq, günlük norma "
+           << feed_detail::kg(in.rate_given ? in.rate : 2.5)
+           << "% (sualda göstərilməyib).";
+    }
     return os.str();
+}
+
+// ---------------------------------------------------------------------------
+// Answer text hygiene (PART 1)
+// ---------------------------------------------------------------------------
+// The API's `answer` field must be the answer only. Source labels, "Qeyd:",
+// "Dəyişiklik:", preambles and closing offers are removed here; the same
+// information is carried by sources_json() and the notes_ui flags.
+inline bool is_answer_meta_line(const std::string& folded) {
+    static const char* PREFIX[] = {"qeyd:",   "qeyd -",  "deyisiklik:",
+                                   "menbe:",  "menbeler:", "istifade olunan menbeler",
+                                   "sources:", "xulase:", "sual:",
+                                   "cavab:"};
+    for (const char* p : PREFIX) {
+        if (folded.rfind(p, 0) == 0) return true;
+    }
+    static const char* ANYWHERE[] = {
+        "esasinda verilib",
+        "vacib qerarlar ucun menbeni yoxlayin",
+        "deqiq diaqnoz ve mualice ucun mutleq baytar hekime",
+        "elave sualiniz varsa",
+        "baska sualiniz varsa",
+        "diger suallariniz varsa"};
+    for (const char* a : ANYWHERE) {
+        if (folded.find(a) != std::string::npos) return true;
+    }
+    return false;
+}
+
+inline std::string clean_answer_text(const std::string& in) {
+    std::string s = in;
+    // 1) inline tags: [Mənbə: ...], [İnternet: ...], [Ümumi bilik], ...
+    size_t pos = 0;
+    while ((pos = s.find('[', pos)) != std::string::npos) {
+        const size_t close = s.find(']', pos);
+        if (close == std::string::npos) break;
+        const std::string inner = az_fold(s.substr(pos + 1, close - pos - 1));
+        const bool tag = inner.rfind("menbe", 0) == 0 ||
+                         inner.rfind("internet", 0) == 0 ||
+                         inner.rfind("xulase", 0) == 0 ||
+                         inner.rfind("umumi bilik", 0) == 0 ||
+                         inner.rfind("sohbet yaddasi", 0) == 0;
+        if (tag)
+            s.erase(pos, close - pos + 1);
+        else
+            pos = close + 1;
+    }
+    // 2) meta lines anywhere in the text
+    std::string kept;
+    size_t start = 0;
+    while (start <= s.size()) {
+        const size_t nl = s.find('\n', start);
+        const std::string line =
+            nl == std::string::npos ? s.substr(start) : s.substr(start, nl - start);
+        if (!is_answer_meta_line(az_fold(trim(line)))) {
+            kept += line;
+            kept += '\n';
+        }
+        if (nl == std::string::npos) break;
+        start = nl + 1;
+    }
+    s = trim(kept);
+    // 3) preambles / echoed labels at the very start
+    static const char* PRE[] = {"elbette,", "elbette ", "tebii ki,", "sualiniza gore,",
+                                "qisa cavab:", "duzeldilmis cumle:", "cumle:",
+                                "cavab:"};
+    for (bool changed = true; changed;) {
+        changed = false;
+        const std::string f = az_fold(s);
+        for (const char* p : PRE) {
+            if (f.rfind(p, 0) == 0) {
+                s = trim(s.substr(std::string(p).size()));
+                changed = true;
+                break;
+            }
+        }
+    }
+    // 4) collapse blank-line runs
+    std::string out;
+    int blanks = 0;
+    for (char c : s) {
+        if (c == '\n') {
+            if (++blanks > 2) continue;
+        } else {
+            blanks = 0;
+        }
+        out.push_back(c);
+    }
+    return trim(out);
 }
 
 }  // namespace dumy

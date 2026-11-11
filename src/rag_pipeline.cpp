@@ -341,30 +341,45 @@ std::vector<Chunk> cited_chunks(const std::string& answer,
 }  // namespace
 
 nlohmann::json AnswerResult::sources_json() const {
+    // Structured provenance: {type: pdf|web|general|computed|memory, file,
+    // page, snippet}. The answer TEXT never carries source labels.
     nlohmann::json arr = nlohmann::json::array();
     std::vector<std::string> seen;
+    auto basename = [](const std::string& path) {
+        const size_t slash = path.find_last_of("/\\");
+        return slash == std::string::npos ? path : path.substr(slash + 1);
+    };
     for (const auto& c : used_chunks) {
-        const std::string lbl = c.label();
-        if (std::find(seen.begin(), seen.end(), lbl) != seen.end()) continue;
-        seen.push_back(lbl);
-        arr.push_back({{"label", lbl},
-                       {"type", c.kind},
+        if (c.source.empty() && c.url.empty()) continue;
+        const bool web = c.kind == "web";
+        const std::string key = (web ? c.url : c.source) + "|" +
+                                std::to_string(web ? 0 : c.page);
+        if (std::find(seen.begin(), seen.end(), key) != seen.end()) continue;
+        seen.push_back(key);
+        const std::string file = web ? c.url : basename(c.source);
+        arr.push_back({{"type", web ? "web" : "pdf"},
+                       {"file", file},
+                       {"page", web ? 0 : c.page},
+                       {"snippet", utf8_prefix(trim(c.text), 280)},
                        {"source", c.source},
-                       {"page", c.page},
                        {"url", c.url},
                        {"trusted", c.trusted}});
         if (arr.size() >= 14) break;
     }
-    // Sources are ONLY what the answer actually cites. Small-talk / no-source
-    // turns return an empty list (UI hides the collapsible section).
-    if (arr.empty() && no_sources) return nlohmann::json::array();
     if (arr.empty()) {
-        arr.push_back({{"label", "[Ümumi bilik]"},
-                       {"type", "knowledge"},
-                       {"source", ""},
-                       {"page", 0},
-                       {"url", ""},
-                       {"trusted", false}});
+        if (used_memory) {
+            arr.push_back({{"type", "memory"}, {"file", ""}, {"page", 0},
+                           {"snippet", ""}, {"source", ""}, {"url", ""},
+                           {"trusted", false}});
+        } else if (computed) {
+            arr.push_back({{"type", "computed"}, {"file", ""}, {"page", 0},
+                           {"snippet", ""}, {"source", ""}, {"url", ""},
+                           {"trusted", false}});
+        } else if (general_answer) {
+            arr.push_back({{"type", "general"}, {"file", ""}, {"page", 0},
+                           {"snippet", ""}, {"source", ""}, {"url", ""},
+                           {"trusted", false}});
+        }
     }
     return arr;
 }
@@ -781,6 +796,19 @@ AnswerResult RagPipeline::answer(const std::string& question,
                                  const MemoryRef& mem,
                                  const StreamFn& on_delta,
                                  const StatusFn& on_status) const {
+    AnswerResult r = answer_impl(question, session_id, mem, on_delta, on_status);
+    // Deterministic text hygiene: the API's `answer` is the answer only.
+    // Sources live in sources_json(), disclaimers/flags in notes_ui.
+    r.answer = clean_answer_text(r.answer);
+    if (trim(r.answer).empty()) r.answer = HONEST_FAILURE_MESSAGE;
+    return r;
+}
+
+AnswerResult RagPipeline::answer_impl(const std::string& question,
+                                      const std::string& session_id,
+                                      const MemoryRef& mem,
+                                      const StreamFn& on_delta,
+                                      const StatusFn& on_status) const {
     AnswerResult res;
     StageTimer t_total;
     const std::string q_original = trim(question);
@@ -824,6 +852,7 @@ AnswerResult RagPipeline::answer(const std::string& question,
     if (is_feed_calculation_question(q)) {
         log_info("fastpath: feed calculation - explicit assumptions, no PDF citations");
         res.qtype = "calculation";
+        res.computed = true;
         res.from_own_knowledge = true;
         res.no_sources = true;
         res.answer = build_feed_calculation_answer(q);
@@ -842,6 +871,7 @@ AnswerResult RagPipeline::answer(const std::string& question,
             log_info("fastpath: arithmetic question [" + arith_expr + "] = " +
                      format_arithmetic_result(value));
             res.qtype = "arithmetic";
+            res.computed = true;
             res.smalltalk = true;
             res.no_sources = true;
             res.answer = "Nəticə: " + format_arithmetic_result(value) + ".";
@@ -853,6 +883,7 @@ AnswerResult RagPipeline::answer(const std::string& question,
         if (!arith_expr.empty() || has_arithmetic_operator(q)) {
             log_info("arithmetic: operation could not be parsed - asking to rephrase");
             res.qtype = "arithmetic";
+            res.computed = true;
             res.smalltalk = true;
             res.no_sources = true;
             res.answer = ARITHMETIC_REPHRASE_MESSAGE;
@@ -1024,7 +1055,8 @@ AnswerResult RagPipeline::answer(const std::string& question,
                        ftiming.prompt_eval_ms, ftiming.eval_ms,
                        ftiming.prompt_tokens, ftiming.eval_tokens,
                        ftiming.done_reason);
-        std::string out = shape_fact_check_answer(raw, q);
+        // Verdict + at most two short sentences (the verdict is sentence 1).
+        std::string out = limit_sentences(shape_fact_check_answer(raw, q), 3);
 
         // Two-pass agreement: a 4B model is over-confident, so a second
         // adversarial pass must reach the same verdict. Disagreement is an
@@ -1090,6 +1122,7 @@ AnswerResult RagPipeline::answer(const std::string& question,
         res.qtype = "general";
         res.no_sources = true;
         res.from_own_knowledge = true;
+        res.general_answer = true;
         const bool grammar = is_grammar_topic(q);
         const bool procedure = is_procedure_request(q) || is_list_question(q);
         if (grammar || procedure) {
@@ -1875,8 +1908,7 @@ AnswerResult RagPipeline::answer(const std::string& question,
             std::string name = c.source;
             const size_t slash = name.find_last_of("/\\");
             if (slash != std::string::npos) name = name.substr(slash + 1);
-            final_answer = trim(final_answer) + " [Mənbə: " + name + ", səh. " +
-                           std::to_string(c.page) + "]";
+            // Provenance goes to sources, never into the answer text.
             res.used_chunks.push_back(c);
             log_info("citation fallback: attached " + name + " p." +
                      std::to_string(c.page) + " (shared terms=" +
@@ -1885,26 +1917,18 @@ AnswerResult RagPipeline::answer(const std::string& question,
         }
     }
 
-    std::string out = final_answer;
+    // --- 8b. the text is the answer only -----------------------------------
+    // Notes, disclaimers and citations are structured fields now (sources /
+    // notes_ui); nothing is appended to the answer text.
     if (selected.empty()) {
         res.from_own_knowledge = true;
-        out += "\n\n";
-        out += pdf_relevance_failed ? std::string(NO_RELEVANT_CONTEXT_NOTE)
-                                    : no_context_note(web_enabled || res.used_web);
+        res.general_answer = true;
     }
-    // The web-failure note goes before the safety line so the safety line is
-    // always the very last thing in the answer.
     if (web_enabled && !web_out.warning.empty() && !res.used_web) {
-        out += "\n\nQeyd: bu dəfə internet axtarışı işləmədi (" + web_out.warning +
-               "); cavab PDF mənbələri və ümumi bilik əsasında verildi.";
         res.warning = "web_failed: " + web_out.warning;
     }
-    if (needs_safety_warning(q)) {
-        out = trim(out);
-        out += "\n\n";
-        out += SAFETY_WARNING;
-    }
-    res.answer = out;
+    res.safety_warning = needs_safety_warning(q);
+    res.answer = final_answer;
     const double ms_post = t_post.ms();
     const double ms_total = t_total.ms();
     log_info("Mərhələ vaxtları (ms): routing=" + std::to_string((int)ms_route) +

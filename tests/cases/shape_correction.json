@@ -1,0 +1,1 @@
+{"id":"shape_correction","question":"men sabah mekteve gedecem","qtype":"language_task","exactly_one_sentence":true,"expect_contains":["Mən sabah","məktəbə"],"max_pdf_sources":0,"max_seconds":10}

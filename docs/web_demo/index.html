@@ -251,6 +251,17 @@
   .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); background: transparent; }
   .btn-row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 
+  .chip.pdf { cursor: pointer; }
+  .chip.safety { border-color: color-mix(in srgb, var(--earth) 55%, var(--border)); color: var(--earth); }
+  .snippet-pop {
+    position: absolute; z-index: 60; width: min(320px, calc(100vw - 24px));
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    box-shadow: var(--shadow); padding: 12px 14px; animation: rise 0.15s ease both;
+  }
+  .snippet-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12.5px; }
+  .snippet-head strong { flex: 1; overflow-wrap: anywhere; }
+  .snippet-text { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.5; max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
+
   /* ---------------- responsive ---------------- */
   #scrim { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 25; }
   @media (max-width: 860px) {
@@ -571,26 +582,77 @@
     return parts[parts.length - 1] || path;
   }
 
+  var CHIP_LABEL = { general: "Ümumi bilik", computed: "Hesablama", memory: "Söhbət yaddaşı" };
+
+  function closePopovers() {
+    Array.prototype.forEach.call(document.querySelectorAll(".snippet-pop"), function (p) { p.remove(); });
+  }
+
+  function openSnippet(anchor, source) {
+    closePopovers();
+    var pop = el("div", "snippet-pop");
+    pop.setAttribute("role", "dialog");
+    pop.setAttribute("aria-label", "Mənbə fraqmenti");
+    var head = el("div", "snippet-head");
+    var title = source.file || basename(source.source) || "Mənbə";
+    if (source.page) title += " · səh. " + source.page;
+    head.appendChild(el("strong", null, title));
+    var x = el("button", "icon-btn");
+    x.type = "button";
+    x.setAttribute("aria-label", "Bağla");
+    x.textContent = "✕";
+    x.addEventListener("click", closePopovers);
+    head.appendChild(x);
+    pop.appendChild(head);
+    pop.appendChild(el("p", "snippet-text", source.snippet || "Bu mənbə üçün fraqment yoxdur."));
+    document.body.appendChild(pop);
+    var r = anchor.getBoundingClientRect();
+    pop.style.left = Math.max(12, Math.min(r.left, window.innerWidth - 340)) + "px";
+    pop.style.top = (r.bottom + window.scrollY + 6) + "px";
+  }
+
+  function safetyBadge(msg) {
+    var flag = !!(msg.notes_ui && msg.notes_ui.safety_warning);
+    if (!flag && msg.qtype !== "diagnosis") return null;
+    return chip("Baytar həkimlə məsləhətləşin", "safety");
+  }
+
   function sourceChips(sources) {
     var wrap = document.createDocumentFragment();
     var seen = {};
     (sources || []).forEach(function (s) {
-      if (!s || !s.type) return;
+      if (!s) return;
+      if (typeof s === "string") {  // stored conversation: label already
+        if (seen[s]) return;
+        seen[s] = 1;
+        wrap.appendChild(chip(s, /səh\./.test(s) ? "pdf" : ""));
+        return;
+      }
+      if (!s.type) return;
       if (s.type === "pdf") {
-        var label = basename(s.source) + (s.page ? " · səh. " + s.page : "");
+        var label = (s.file || basename(s.source)) + (s.page ? " · səh. " + s.page : "");
         if (seen[label]) return;
         seen[label] = 1;
-        wrap.appendChild(chip(label, "pdf"));
-      } else if (s.type === "web" && s.source) {
-        wrap.appendChild(chip(basename(s.source)));
-      } else if (s.type === "knowledge" && !s.source) {
-        wrap.appendChild(chip("Ümumi bilik"));
+        var b = chip(label, "pdf");
+        b.setAttribute("role", "button");
+        b.setAttribute("tabindex", "0");
+        b.title = "Mənbə fraqmentini göstər";
+        b.addEventListener("click", function () { openSnippet(b, s); });
+        b.addEventListener("keydown", function (ev) {
+          if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); openSnippet(b, s); }
+        });
+        wrap.appendChild(b);
+      } else if (s.type === "web") {
+        wrap.appendChild(chip(s.file || basename(s.source) || "İnternet"));
+      } else if (CHIP_LABEL[s.type]) {
+        wrap.appendChild(chip(CHIP_LABEL[s.type]));
       }
     });
     return wrap;
   }
 
   function addMessage(msg) {
+    if (!msg.qtype && msg.route) msg.qtype = msg.route;
     var wrap = el("div", "msg " + (msg.role === "user" ? "user" : "assistant"));
     var bubble = el("div", "bubble");
 
@@ -606,9 +668,8 @@
       var meta = el("div", "meta");
       if (msg.qtype) meta.appendChild(chip(ROUTES[msg.qtype] || msg.qtype, "route"));
       if (msg.sources && msg.sources.length) meta.appendChild(sourceChips(msg.sources));
-      if (msg.memory_used || (msg.text && msg.text.indexOf("[Söhbət yaddaşı]") >= 0)) {
-        meta.appendChild(chip("Söhbət yaddaşı"));
-      }
+      var badge = safetyBadge(msg);
+      if (badge) meta.appendChild(badge);
       if (msg.latency_ms !== undefined && msg.latency_ms !== null) {
         meta.appendChild(chip((msg.latency_ms / 1000).toFixed(1) + " s"));
       }
@@ -907,6 +968,7 @@
         qtype: final ? final.qtype : "",
         sources: final ? final.sources : [],
         memory_used: final ? final.memory_used : false,
+        notes_ui: final ? final.notes_ui : null,
         latency_ms: final && final.latency_ms !== undefined ? final.latency_ms : (Date.now() - started)
       };
       if (final && final.conversation_id) state.currentId = final.conversation_id;
@@ -915,9 +977,8 @@
       var meta = el("div", "meta");
       if (msg.qtype) meta.appendChild(chip(ROUTES[msg.qtype] || msg.qtype, "route"));
       if (msg.sources && msg.sources.length) meta.appendChild(sourceChips(msg.sources));
-      if (msg.memory_used || textOut.indexOf("[Söhbət yaddaşı]") >= 0) {
-        meta.appendChild(chip("Söhbət yaddaşı"));
-      }
+      var badge2 = safetyBadge(msg);
+      if (badge2) meta.appendChild(badge2);
       meta.appendChild(chip((msg.latency_ms / 1000).toFixed(1) + " s"));
       holder.wrap.appendChild(meta);
 
@@ -1118,8 +1179,11 @@
         sendMessage($("input").value);
       }
     });
+    document.addEventListener("click", function (ev) {
+      if (!ev.target.closest(".snippet-pop") && !ev.target.closest(".chip.pdf")) closePopovers();
+    });
     document.addEventListener("keydown", function (ev) {
-      if (ev.key === "Escape") closeSidebar();
+      if (ev.key === "Escape") { closeSidebar(); closePopovers(); }
       if (ev.ctrlKey && ev.key.toLowerCase() === "k") {
         ev.preventDefault();
         $("input").focus();

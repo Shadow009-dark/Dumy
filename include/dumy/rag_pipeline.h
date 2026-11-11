@@ -49,7 +49,10 @@ struct AnswerResult {
     bool from_own_knowledge = false;    // context was empty/weak
     bool no_sources = false;            // small-talk fast path: sources: []
     bool smalltalk = false;             // answered by the small-talk fast path
-    bool used_memory = false;           // a [Söhbət yaddaşı] fact influenced it
+    bool used_memory = false;           // a stored fact influenced the answer
+    bool computed = false;              // arithmetic / feed calculator result
+    bool general_answer = false;        // answered without PDF context
+    bool safety_warning = false;        // UI shows the veterinary badge
     std::string warning;                // pipeline-level warning ("" = none)
 
     nlohmann::json sources_json() const;  // REST-friendly source list
@@ -103,6 +106,13 @@ public:
                         const StatusFn& on_status = nullptr) const;
 
 private:
+    // The real pipeline; the public answer() adds deterministic text hygiene.
+    AnswerResult answer_impl(const std::string& question,
+                             const std::string& session_id,
+                             const MemoryRef& mem,
+                             const StreamFn& on_delta,
+                             const StatusFn& on_status) const;
+
     std::vector<Chunk> rerank_or_trim(const std::string& question,
                                       std::vector<Chunk> candidates,
                                       QuestionType qtype,

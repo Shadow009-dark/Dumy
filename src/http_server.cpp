@@ -227,6 +227,19 @@ void seed_session_history(SessionManager& sessions, ConversationStore& store,
     }
 }
 
+// Machine-readable flags for the UI (no prose in the answer text).
+nlohmann::json notes_json(const AnswerResult& r) {
+    int pdfs = 0;
+    for (const auto& s : r.sources_json())
+        if (s.is_object() && s.value("type", std::string()) == "pdf") ++pdfs;
+    return {{"own_knowledge", r.from_own_knowledge},
+            {"memory_used", r.used_memory},
+            {"safety_warning", r.safety_warning},
+            {"no_pdf_context", pdfs == 0},
+            {"refused", r.refused},
+            {"web_used", r.used_web}};
+}
+
 }  // namespace
 
 struct HttpServer::Impl {
@@ -411,6 +424,8 @@ bool HttpServer::start(std::string* err) {
                         {"conversation_id", conversation_id},
                         {"memory_used", r.used_memory},
                         {"latency_ms", latency_ms},
+                        {"route", r.qtype},
+                        {"notes_ui", notes_json(r)},
                         // sanitize: an invalid UTF-8 byte would make dump() throw
                         {"answer", sanitize_utf8(r.answer)},
                         {"sources", r.sources_json()},
@@ -535,6 +550,8 @@ bool HttpServer::start(std::string* err) {
                         {"conversation_id", conversation_id},
                         {"memory_used", r.used_memory},
                         {"latency_ms", latency_ms},
+                        {"route", r.qtype},
+                        {"notes_ui", notes_json(r)},
                         {"answer", sanitize_utf8(r.answer)},
                         {"sources", r.sources_json()},
                         {"qtype", r.qtype},

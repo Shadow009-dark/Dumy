@@ -187,6 +187,14 @@ if (Test-Path $casesDir) {
 }
 if ($cases.Count -eq 0) { Write-Error "no test cases found"; exit 2 }
 
+# Answer text must never contain meta material (PART 1). Markers live in a
+# UTF-8 fixture so this script itself stays ASCII-only for PowerShell 5.1.
+$forbiddenMarkers = @()
+$forbiddenPath = Join-Path $PSScriptRoot 'expected\forbidden.json'
+if (Test-Path $forbiddenPath) {
+    $forbiddenMarkers = @((Get-Content $forbiddenPath -Raw -Encoding UTF8 | ConvertFrom-Json).markers)
+}
+
 $rows = New-Object System.Collections.Generic.List[object]
 $failures = 0
 $warnings = 0
@@ -265,6 +273,21 @@ foreach ($c in $cases) {
     }
     if ($c.no_truncated_word -ne $false -and (Test-TruncatedWord $answer)) {
         $problems.Add('answer ends mid-word') | Out-Null
+    }
+    for ($mi = 0; $mi -lt $forbiddenMarkers.Count; $mi++) {
+        $bad = [string]$forbiddenMarkers[$mi]
+        if ($bad -and $answer.IndexOf($bad, [StringComparison]::Ordinal) -ge 0) {
+            $problems.Add("answer contains forbidden marker #$mi") | Out-Null
+        }
+    }
+    if ($c.exactly_one_sentence) {
+        $sentences = ([regex]::Matches($answer.Trim(), '[.!?](\s|$)')).Count
+        if ($sentences -ne 1) { $problems.Add("expected 1 sentence, got $sentences") | Out-Null }
+    }
+    if ($c.route) {
+        $routeVal = ''
+        try { $routeVal = [string]$j.route } catch { $routeVal = '' }
+        if ($routeVal -ne [string]$c.route) { $problems.Add("route $routeVal != $($c.route)") | Out-Null }
     }
     if ($answer -match '(?i)(\b\p{L}+\b)(\s+\1){4,}') { $problems.Add('repetition loop') | Out-Null }
     $maxSeconds = 30.0
