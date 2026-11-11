@@ -1000,12 +1000,21 @@ inline std::string build_feed_calculation_answer(const std::string& question) {
 // "Dəyişiklik:", preambles and closing offers are removed here; the same
 // information is carried by sources_json() and the notes_ui flags.
 inline bool is_answer_meta_line(const std::string& folded) {
+    // Strip a list marker first: "- Qeyd: ..." and "1. Qeyd: ..." are meta too.
+    size_t i = 0;
+    while (i < folded.size() && (folded[i] == '-' || folded[i] == '*' || folded[i] == ' '))
+        ++i;
+    size_t j = i;
+    while (j < folded.size() && folded[j] >= '0' && folded[j] <= '9') ++j;
+    if (j > i && j < folded.size() && folded[j] == '.') i = j + 1;
+    while (i < folded.size() && folded[i] == ' ') ++i;
+    const std::string head = folded.substr(i);
     static const char* PREFIX[] = {"qeyd:",   "qeyd -",  "deyisiklik:",
                                    "menbe:",  "menbeler:", "istifade olunan menbeler",
                                    "sources:", "xulase:", "sual:",
                                    "cavab:"};
     for (const char* p : PREFIX) {
-        if (folded.rfind(p, 0) == 0) return true;
+        if (head.rfind(p, 0) == 0) return true;
     }
     static const char* ANYWHERE[] = {
         "esasinda verilib",
@@ -1018,6 +1027,36 @@ inline bool is_answer_meta_line(const std::string& folded) {
         if (folded.find(a) != std::string::npos) return true;
     }
     return false;
+}
+
+// Drops meta sentences that share a line with real content
+// ("Su 100 °C-də qaynayır. Qeyd: ..." -> "Su 100 °C-də qaynayır.").
+inline std::string filter_answer_sentences(const std::string& line) {
+    std::string out;
+    std::string cur;
+    auto flush = [&]() {
+        const std::string t = trim(cur);
+        const std::string f = az_fold(t);
+        if (!t.empty() && !is_answer_meta_line(f) &&
+            f.find("esasinda verilib") == std::string::npos &&
+            f.find("qeyd:") == std::string::npos &&
+            f.find("vacib qerarlar ucun menbeni yoxlayin") == std::string::npos) {
+            if (!out.empty()) out += " ";
+            out += t;
+        }
+        cur.clear();
+    };
+    for (size_t i = 0; i < line.size(); ++i) {
+        cur.push_back(line[i]);
+        const char c = line[i];
+        if ((c == '.' || c == '!' || c == '?') &&
+            (i + 1 == line.size() || line[i + 1] == ' ')) {
+            flush();
+            if (i + 1 < line.size()) ++i;  // swallow the separator space
+        }
+    }
+    flush();
+    return out;
 }
 
 inline std::string clean_answer_text(const std::string& in) {
@@ -1046,7 +1085,7 @@ inline std::string clean_answer_text(const std::string& in) {
         const std::string line =
             nl == std::string::npos ? s.substr(start) : s.substr(start, nl - start);
         if (!is_answer_meta_line(az_fold(trim(line)))) {
-            kept += line;
+            kept += filter_answer_sentences(line);
             kept += '\n';
         }
         if (nl == std::string::npos) break;

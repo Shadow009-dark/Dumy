@@ -800,6 +800,30 @@ AnswerResult RagPipeline::answer(const std::string& question,
     // Deterministic text hygiene: the API's `answer` is the answer only.
     // Sources live in sources_json(), disclaimers/flags in notes_ui.
     r.answer = clean_answer_text(r.answer);
+    // Belt and braces: a marker that survived sentence filtering removes its
+    // whole line, so the invariant holds for every generation path.
+    {
+        std::string kept;
+        size_t start = 0;
+        while (start <= r.answer.size()) {
+            const size_t nl = r.answer.find('\n', start);
+            const std::string line =
+                nl == std::string::npos ? r.answer.substr(start)
+                                        : r.answer.substr(start, nl - start);
+            const std::string f = az_fold(line);
+            const bool bad = f.find("qeyd:") != std::string::npos ||
+                             f.find("menbe:") != std::string::npos ||
+                             f.find("deyisiklik:") != std::string::npos ||
+                             f.find("esasinda verilib") != std::string::npos;
+            if (!bad) {
+                kept += line;
+                kept += '\n';
+            }
+            if (nl == std::string::npos) break;
+            start = nl + 1;
+        }
+        r.answer = trim(kept);
+    }
     if (trim(r.answer).empty()) r.answer = HONEST_FAILURE_MESSAGE;
     return r;
 }

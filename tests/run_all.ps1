@@ -391,7 +391,9 @@ $html = ''
 if (Test-Path $htmlPath) { $html = [IO.File]::ReadAllText($htmlPath, [Text.Encoding]::UTF8) }
 $uiOk = ($html.Length -gt 1000) -and (-not ($html -match '(?i)<link\b')) -and
         (-not ($html -match '(?i)@import')) -and (-not ($html -match 'src="http')) -and
-        (-not ($html -match '(?i)fonts\.')) -and (-not ($html -match 'innerHTML'))
+        (-not ($html -match '(?i)fonts\.')) -and (-not ($html -match 'innerHTML')) -and
+        ($html -match 'SpeechRecognition') -and ($html -match 'az-AZ') -and
+        ($html -match 'Ctrl\+Shift\+M|ctrlKey')
 Add-Row 'ui_static_safe' $uiOk 0 'no CDN/fonts/innerHTML' 'static check only'
 
 # --- conversations survive a server restart ------------------------------
@@ -415,6 +417,39 @@ $gp = Invoke-Api 'GET' (('/conversations/' + $pcid)) $memClient $null
 $msgCount = 0
 if ($gp.json -and $gp.json.conversation) { $msgCount = @($gp.json.conversation.messages).Count }
 Add-Row 'mem_persist_restart' (($gp.code -eq '200') -and ($msgCount -ge 2)) 0 ('messages=' + $msgCount) ''
+
+# --- welcome chips: every example in config.json must still work ----------
+$honestMarkers = @()
+$honestPath = Join-Path $PSScriptRoot 'expected\honest_failure.json'
+if (Test-Path $honestPath) {
+    $honestMarkers = @((Get-Content $honestPath -Raw -Encoding UTF8 | ConvertFrom-Json).markers)
+}
+$cfg = Invoke-Api 'GET' '/config' $memClient $null
+$examples = @()
+if ($cfg.json -and $cfg.json.welcome_examples) { $examples = @($cfg.json.welcome_examples) }
+Add-Row 'welcome_config' ($examples.Count -ge 4) 0 ('count=' + $examples.Count) ''
+$wi = 0
+foreach ($ex in $examples) {
+    $wi++
+    $body = @{ message = [string]$ex.text; session_id = 'welcome-suite' }
+    $wr = Send-ChatBody $body $memClient ('welcome' + $wi)
+    $wans = [string]$wr.json.answer
+    # Correctness of the answer is the chip-selection criterion (scored once,
+    # see tests\welcome); the regression guards that the chip still answers
+    # cleanly and quickly, so an honest-failure answer is reported, not failed.
+    $wbad = ($wr.code -ne '200') -or ($wans.Length -lt 8) -or ($wr.seconds -gt 30)
+    $whonest = $false
+    foreach ($m in $honestMarkers) {
+        if ($wans.IndexOf([string]$m, [StringComparison]::Ordinal) -ge 0) { $whonest = $true }
+    }
+    foreach ($m in $forbiddenMarkers) {
+        if ($wans.IndexOf([string]$m, [StringComparison]::Ordinal) -ge 0) { $wbad = $true }
+    }
+    if ($wr.json.pdf_sources -and [int]$wr.json.pdf_sources -lt 0) { $wbad = $true }
+    $wnote = 'len=' + $wans.Length
+    if ($whonest) { $wnote += ' honest-failure' }
+    Add-Row ('welcome_' + $wi) (-not $wbad) $wr.seconds $wnote $wans
+}
 
 # The server we launched must still be the same process with the same build.
 $healthError = ''

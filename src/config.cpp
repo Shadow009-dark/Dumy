@@ -88,6 +88,7 @@ Config Config::load(const std::string& path, std::string* err) {
     read_if(j, "memory_max_facts", c.memory_max_facts);
     read_if(j, "memory_injection_tokens", c.memory_injection_tokens);
     read_if(j, "conversation_retention_days", c.conversation_retention_days);
+    read_if(j, "welcome_examples", c.welcome_examples);
     read_if(j, "rerank_top_n", c.rerank_top_n);
     read_if(j, "rerank_max_candidates", c.rerank_max_candidates);
     read_if(j, "rerank_min_score", c.rerank_min_score);
@@ -271,6 +272,7 @@ nlohmann::json Config::to_json() const {
         {"fast_mode", fast_mode},
         {"request_timeout", request_timeout},
         {"max_history_messages", max_history_messages},
+        {"welcome_examples", welcome_examples},
         {"rerank_top_n", rerank_top_n},
         {"rerank_max_candidates", rerank_max_candidates},
         {"rerank_min_score", rerank_min_score},

@@ -73,6 +73,14 @@
   "memory_max_facts": 50,
   "memory_injection_tokens": 160,
   "conversation_retention_days": 0,
+  "welcome_examples": [
+    { "text": "120 baş mal-qaranın 30 günlük yemi nə qədərdir?", "label": "Yem hesablaması" },
+    { "text": "20 baş dana üçün 45 günlük yem hesablayın.", "label": "Rasion hesabı" },
+    { "text": "Mal-qarada qarayara xəstəliyinin əlamətləri nələrdir?", "label": "Mal-qara sağlamlığı" },
+    { "text": "İnək gündə neçə dəfə sağılmalıdır?", "label": "Südçülük" },
+    { "text": "100 baş inək üçün 20 günlük yem hesablayın.", "label": "Yem hesablaması" },
+    { "text": "50 baş qoyunun gündəlik yem norması nə qədərdir?", "label": "Yem hesablaması" }
+  ],
   "rerank_top_n": 8,
   "rerank_max_candidates": 6,
   "rerank_min_score": 8.0,

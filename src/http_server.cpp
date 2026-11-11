@@ -283,8 +283,8 @@ bool HttpServer::start(std::string* err) {
 
     // --- CORS preflight ----------------------------------------------------
     for (const char* path : {"/", "/chat", "/chat/stream", "/ingest", "/health",
-                             "/documents", "/upload", R"(/conversations.*)",
-                             R"(/memory.*)"}) {
+                             "/documents", "/upload", "/config",
+                             R"(/conversations.*)", R"(/memory.*)"}) {
         svr.Options(path, [](const httplib::Request& req, httplib::Response& res) {
             apply_cors(req, res);
             res.status = 204;
@@ -802,6 +802,17 @@ bool HttpServer::start(std::string* err) {
         const bool on = body["enabled"].get<bool>();
         store_.set_enabled(on);
         reply_json(req, res, 200, {{"enabled", cfg_.memory_enabled && store_.enabled()}});
+    });
+
+    // --- GET /config: UI-safe settings (never secrets) ----------------------
+    svr.Get("/config", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!check_api_access(req, res, true)) return;
+        reply_json(req, res, 200,
+                   {{"welcome_examples", cfg_.welcome_examples},
+                    {"chat_model", pipeline_.chat_model()},
+                    {"memory_enabled", cfg_.memory_enabled},
+                    {"memory_max_facts", cfg_.memory_max_facts},
+                    {"version", 1}});
     });
 
     // --- 404 / error handler ------------------------------------------------
