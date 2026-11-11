@@ -84,6 +84,10 @@ Config Config::load(const std::string& path, std::string* err) {
     read_if(j, "fast_mode", c.fast_mode);
     read_if(j, "request_timeout", c.request_timeout);
     read_if(j, "max_history_messages", c.max_history_messages);
+    read_if(j, "memory_enabled", c.memory_enabled);
+    read_if(j, "memory_max_facts", c.memory_max_facts);
+    read_if(j, "memory_injection_tokens", c.memory_injection_tokens);
+    read_if(j, "conversation_retention_days", c.conversation_retention_days);
     read_if(j, "rerank_top_n", c.rerank_top_n);
     read_if(j, "rerank_max_candidates", c.rerank_max_candidates);
     read_if(j, "rerank_min_score", c.rerank_min_score);
@@ -169,6 +173,10 @@ Config Config::load(const std::string& path, std::string* err) {
     if (c.top_k_simple < 1) c.top_k_simple = 1;
     if (c.top_k_broad < c.top_k_simple) c.top_k_broad = c.top_k_simple;
     if (c.max_history_messages < 0) c.max_history_messages = 0;
+    if (c.memory_max_facts < 1) c.memory_max_facts = 1;
+    if (c.memory_injection_tokens < 0) c.memory_injection_tokens = 0;
+    if (c.memory_injection_tokens > 500) c.memory_injection_tokens = 500;
+    if (c.conversation_retention_days < 0) c.conversation_retention_days = 0;
     if (c.port <= 0 || c.port > 65535) c.port = 8085;
     if (c.request_timeout < 5) c.request_timeout = 5;
     if (c.num_ctx < 1024) c.num_ctx = 1024;

@@ -54,8 +54,10 @@ void apply_cors(const httplib::Request& req, httplib::Response& res) {
     if (!origin.empty()) {
         res.set_header("Access-Control-Allow-Origin", origin);
         res.set_header("Vary", "Origin");
-        res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        res.set_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key");
+        res.set_header("Access-Control-Allow-Methods",
+                       "GET, POST, PATCH, DELETE, OPTIONS");
+        res.set_header("Access-Control-Allow-Headers",
+                       "Content-Type, X-API-Key, X-Session-Id");
     }
 }
 
@@ -196,6 +198,35 @@ std::string sanitize_filename(std::string name) {
     return out;
 }
 
+// "file.pdf səh. 12" labels stored with each assistant turn.
+std::vector<std::string> source_labels(const AnswerResult& r) {
+    std::vector<std::string> out;
+    for (const auto& s : r.sources_json()) {
+        if (!s.is_object()) continue;
+        const std::string type = s.value("type", std::string());
+        const std::string src = s.value("source", std::string());
+        if (type == "pdf" && !src.empty())
+            out.push_back(src + " səh. " + std::to_string(s.value("page", 0)));
+        else if (type == "web" && !src.empty())
+            out.push_back(src);
+    }
+    return out;
+}
+
+// After a server restart the in-memory session is empty; seed it from the
+// stored conversation so the model still sees the last few turns.
+void seed_session_history(SessionManager& sessions, ConversationStore& store,
+                          const std::string& client, const std::string& conv,
+                          const std::string& session_id, size_t keep) {
+    if (!sessions.history(session_id).empty()) return;
+    const auto stored = store.recent(client, conv, keep);
+    for (size_t i = 0; i + 1 < stored.size(); ++i) {
+        if (stored[i].role == "user" && stored[i + 1].role == "assistant")
+            sessions.append(session_id, {"user", stored[i].text},
+                            {"assistant", stored[i + 1].text});
+    }
+}
+
 }  // namespace
 
 struct HttpServer::Impl {
@@ -216,9 +247,9 @@ struct HttpServer::Impl {
 HttpServer::~HttpServer() = default;
 
 HttpServer::HttpServer(const Config& cfg, RagPipeline& pipeline, Indexer& indexer,
-                       SessionManager& sessions)
+                       SessionManager& sessions, ConversationStore& conversations)
     : cfg_(cfg), pipeline_(pipeline), indexer_(indexer), sessions_(sessions),
-      impl_(std::make_unique<Impl>()) {}
+      store_(conversations), impl_(std::make_unique<Impl>()) {}
 
 bool HttpServer::start(std::string* err) {
     auto& svr = impl_->svr;
@@ -239,7 +270,8 @@ bool HttpServer::start(std::string* err) {
 
     // --- CORS preflight ----------------------------------------------------
     for (const char* path : {"/", "/chat", "/chat/stream", "/ingest", "/health",
-                             "/documents", "/upload"}) {
+                             "/documents", "/upload", R"(/conversations.*)",
+                             R"(/memory.*)"}) {
         svr.Options(path, [](const httplib::Request& req, httplib::Response& res) {
             apply_cors(req, res);
             res.status = 204;
@@ -345,13 +377,40 @@ bool HttpServer::start(std::string* err) {
                                       " simvol)"}});
             return;
         }
+        const std::string client =
+            ConversationStore::sanitize_client(req.get_header_value("X-Session-Id"));
         std::string session_id = body.value("session_id", std::string());
         if (session_id.empty()) session_id = SessionManager::make_session_id();
 
+        // Optional conversation: created when missing, always returned.
+        std::string conversation_id = body.value("conversation_id", std::string());
+        if (!conversation_id.empty() && !ConversationStore::valid_id(conversation_id)) {
+            reply_json(req, res, 400,
+                       {{"error", "conversation_id yalnız hərf, rəqəm, '-' və '_' "
+                                  "ola bilər"}});
+            return;
+        }
+        if (conversation_id.empty() || !store_.exists(client, conversation_id))
+            conversation_id = store_.create(client, message).id;
+        seed_session_history(sessions_, store_, client, conversation_id, session_id,
+                             static_cast<size_t>(std::max(2, cfg_.max_history_messages)));
+
+        const auto t_start = std::chrono::steady_clock::now();
         try {
-            AnswerResult r = pipeline_.answer(message, session_id, nullptr);
+            AnswerResult r = pipeline_.answer(
+                message, session_id, MemoryRef{client, conversation_id}, nullptr);
+            const long long latency_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - t_start)
+                    .count();
+            if (cfg_.memory_enabled)
+                store_.append_turn(client, conversation_id, message, r.answer,
+                                   r.qtype, source_labels(r), latency_ms);
             reply_json(req, res, 200,
                        {{"session_id", session_id},
+                        {"conversation_id", conversation_id},
+                        {"memory_used", r.used_memory},
+                        {"latency_ms", latency_ms},
                         // sanitize: an invalid UTF-8 byte would make dump() throw
                         {"answer", sanitize_utf8(r.answer)},
                         {"sources", r.sources_json()},
@@ -391,8 +450,21 @@ bool HttpServer::start(std::string* err) {
                                       " simvol)"}});
             return;
         }
+        const std::string client =
+            ConversationStore::sanitize_client(req.get_header_value("X-Session-Id"));
         std::string session_id = body.value("session_id", std::string());
         if (session_id.empty()) session_id = SessionManager::make_session_id();
+        std::string conversation_id = body.value("conversation_id", std::string());
+        if (!conversation_id.empty() && !ConversationStore::valid_id(conversation_id)) {
+            reply_json(req, res, 400,
+                       {{"error", "conversation_id yalnız hərf, rəqəm, '-' və '_' "
+                                  "ola bilər"}});
+            return;
+        }
+        if (conversation_id.empty() || !store_.exists(client, conversation_id))
+            conversation_id = store_.create(client, message).id;
+        seed_session_history(sessions_, store_, client, conversation_id, session_id,
+                             static_cast<size_t>(std::max(2, cfg_.max_history_messages)));
 
         apply_cors(req, res);
         res.set_header("Cache-Control", "no-cache");
@@ -406,8 +478,9 @@ bool HttpServer::start(std::string* err) {
         auto session_copy = session_id;  // captured by value (req may die)
         res.set_chunked_content_provider(
             "text/event-stream",
-            [this, message, session_copy](size_t offset,
-                                          httplib::DataSink& sink) -> bool {
+            [this, message, session_copy, client, conversation_id](
+                size_t offset, httplib::DataSink& sink) -> bool {
+                const auto t_start = std::chrono::steady_clock::now();
                 if (offset > 0) {  // everything was produced in the first call
                     sink.done();
                     return true;
@@ -428,7 +501,7 @@ bool HttpServer::start(std::string* err) {
                 AnswerResult r;
                 try {
                     r = pipeline_.answer(
-                        message, session_copy,
+                        message, session_copy, MemoryRef{client, conversation_id},
                         [&](const std::string& delta) {
                             if (!delta.empty())
                                 send({{"type", "delta"}, {"text", delta}});
@@ -444,6 +517,13 @@ bool HttpServer::start(std::string* err) {
                     return true;
                 }
 
+                const long long latency_ms =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - t_start)
+                        .count();
+                if (cfg_.memory_enabled)
+                    store_.append_turn(client, conversation_id, message, r.answer,
+                                       r.qtype, source_labels(r), latency_ms);
                 log_info("stream: answer_chars=" + std::to_string(r.answer.size()) +
                          " qtype=" + r.qtype + " warning=" + r.warning);
                 // The done event is built outside the try/catch above, so its
@@ -452,6 +532,9 @@ bool HttpServer::start(std::string* err) {
                     const nlohmann::json done = {
                         {"type", "done"},
                         {"session_id", session_copy},
+                        {"conversation_id", conversation_id},
+                        {"memory_used", r.used_memory},
+                        {"latency_ms", latency_ms},
                         {"answer", sanitize_utf8(r.answer)},
                         {"sources", r.sources_json()},
                         {"qtype", r.qtype},
@@ -584,6 +667,124 @@ bool HttpServer::start(std::string* err) {
                     {"file", safe},
                     {"size", file.content.size()},
                     {"message", "PDF saxlanıldı; POST /ingest ilə indeksləşdirin"}});
+    });
+
+    // --- /conversations: persistent conversation list ----------------------
+    svr.Get(R"(/conversations)", [this](const httplib::Request& req,
+                                        httplib::Response& res) {
+        if (!check_api_access(req, res, true)) return;
+        const std::string client =
+            ConversationStore::sanitize_client(req.get_header_value("X-Session-Id"));
+        nlohmann::json arr = nlohmann::json::array();
+        for (const auto& c : store_.list(client)) arr.push_back(c.to_json(false));
+        reply_json(req, res, 200, {{"conversations", arr}, {"count", arr.size()}});
+    });
+
+    svr.Post(R"(/conversations)", [this](const httplib::Request& req,
+                                         httplib::Response& res) {
+        if (!check_api_access(req, res, true)) return;
+        nlohmann::json body;
+        if (!parse_body(req, res, body)) return;
+        const std::string client =
+            ConversationStore::sanitize_client(req.get_header_value("X-Session-Id"));
+        const Conversation c = store_.create(client, body.value("title", std::string()));
+        reply_json(req, res, 200, {{"conversation", c.to_json(true)}});
+    });
+
+    svr.Get(R"(/conversations/([A-Za-z0-9_-]{1,64}))",
+            [this](const httplib::Request& req, httplib::Response& res) {
+                if (!check_api_access(req, res, true)) return;
+                const std::string client = ConversationStore::sanitize_client(
+                    req.get_header_value("X-Session-Id"));
+                Conversation c;
+                if (!store_.get(client, req.matches[1].str(), &c)) {
+                    reply_json(req, res, 404, {{"error", "söhbət tapılmadı"}});
+                    return;
+                }
+                reply_json(req, res, 200, {{"conversation", c.to_json(true)}});
+            });
+
+    svr.Patch(R"(/conversations/([A-Za-z0-9_-]{1,64}))",
+              [this](const httplib::Request& req, httplib::Response& res) {
+                  if (!check_api_access(req, res, true)) return;
+                  nlohmann::json body;
+                  if (!parse_body(req, res, body)) return;
+                  const std::string client = ConversationStore::sanitize_client(
+                      req.get_header_value("X-Session-Id"));
+                  const std::string title = body.value("title", std::string());
+                  if (trim(title).empty()) {
+                      reply_json(req, res, 400,
+                                 {{"error", "title boş ola bilməz"}});
+                      return;
+                  }
+                  if (!store_.rename(client, req.matches[1].str(), title)) {
+                      reply_json(req, res, 404, {{"error", "söhbət tapılmadı"}});
+                      return;
+                  }
+                  reply_json(req, res, 200, {{"status", "ok"}});
+              });
+
+    svr.Delete(R"(/conversations/([A-Za-z0-9_-]{1,64}))",
+               [this](const httplib::Request& req, httplib::Response& res) {
+                   if (!check_api_access(req, res, true)) return;
+                   const std::string client = ConversationStore::sanitize_client(
+                       req.get_header_value("X-Session-Id"));
+                   if (!store_.remove(client, req.matches[1].str())) {
+                       reply_json(req, res, 404, {{"error", "söhbət tapılmadı"}});
+                       return;
+                   }
+                   reply_json(req, res, 200, {{"status", "ok"}});
+               });
+
+    // --- /memory: long-term facts ------------------------------------------
+    svr.Get(R"(/memory)", [this](const httplib::Request& req,
+                                 httplib::Response& res) {
+        if (!check_api_access(req, res, true)) return;
+        const std::string client =
+            ConversationStore::sanitize_client(req.get_header_value("X-Session-Id"));
+        nlohmann::json arr = nlohmann::json::array();
+        for (const auto& f : store_.facts(client)) arr.push_back(f.to_json());
+        reply_json(req, res, 200,
+                   {{"enabled", cfg_.memory_enabled && store_.enabled()},
+                    {"facts", arr},
+                    {"count", arr.size()},
+                    {"max_facts", cfg_.memory_max_facts}});
+    });
+
+    svr.Delete(R"(/memory/([A-Za-z0-9_-]{1,64}))",
+               [this](const httplib::Request& req, httplib::Response& res) {
+                   if (!check_api_access(req, res, true)) return;
+                   const std::string client = ConversationStore::sanitize_client(
+                       req.get_header_value("X-Session-Id"));
+                   if (!store_.remove_fact(client, req.matches[1].str())) {
+                       reply_json(req, res, 404, {{"error", "yaddaş qeydi tapılmadı"}});
+                       return;
+                   }
+                   reply_json(req, res, 200, {{"status", "ok"}});
+               });
+
+    svr.Delete(R"(/memory)", [this](const httplib::Request& req,
+                                    httplib::Response& res) {
+        if (!check_api_access(req, res, true)) return;
+        const std::string client =
+            ConversationStore::sanitize_client(req.get_header_value("X-Session-Id"));
+        store_.clear_facts(client);
+        reply_json(req, res, 200, {{"status", "ok"}, {"count", 0}});
+    });
+
+    svr.Post(R"(/memory/toggle)", [this](const httplib::Request& req,
+                                         httplib::Response& res) {
+        if (!check_api_access(req, res, true)) return;
+        nlohmann::json body;
+        if (!parse_body(req, res, body)) return;
+        if (!body.contains("enabled") || !body["enabled"].is_boolean()) {
+            reply_json(req, res, 400,
+                       {{"error", "'enabled' true və ya false olmalıdır"}});
+            return;
+        }
+        const bool on = body["enabled"].get<bool>();
+        store_.set_enabled(on);
+        reply_json(req, res, 200, {{"enabled", cfg_.memory_enabled && store_.enabled()}});
     });
 
     // --- 404 / error handler ------------------------------------------------

@@ -13,6 +13,7 @@
 #include "dumy/az_quality.h"
 #include "dumy/bm25_index.h"
 #include "dumy/config.h"
+#include "dumy/conversation_store.h"
 #include "dumy/ollama_client.h"
 #include "dumy/reranker.h"
 #include "dumy/retriever.h"
@@ -48,6 +49,7 @@ struct AnswerResult {
     bool from_own_knowledge = false;    // context was empty/weak
     bool no_sources = false;            // small-talk fast path: sources: []
     bool smalltalk = false;             // answered by the small-talk fast path
+    bool used_memory = false;           // a [Söhbət yaddaşı] fact influenced it
     std::string warning;                // pipeline-level warning ("" = none)
 
     nlohmann::json sources_json() const;  // REST-friendly source list
@@ -61,7 +63,8 @@ public:
 
     RagPipeline(const Config& cfg, OllamaClient& ollama, VectorStorePtr store,
                 Bm25Index& bm25, WebSearch& web, Retriever& retriever,
-                Reranker& reranker, SessionManager& sessions);
+                Reranker& reranker, SessionManager& sessions,
+                ConversationStore* conversations = nullptr);
 
     // Checks Ollama, resolves chat/helper models with fallbacks.
     // Returns false when Ollama is unreachable (clear message in `err`).
@@ -89,6 +92,13 @@ public:
     // the returned AnswerResult is authoritative.
     AnswerResult answer(const std::string& question,
                         const std::string& session_id,
+                        const StreamFn& on_delta,
+                        const StatusFn& on_status = nullptr) const;
+
+    // Memory-aware variant: `mem` scopes the stored facts/conversation.
+    AnswerResult answer(const std::string& question,
+                        const std::string& session_id,
+                        const MemoryRef& mem,
                         const StreamFn& on_delta,
                         const StatusFn& on_status = nullptr) const;
 
@@ -124,6 +134,7 @@ private:
     Retriever& retriever_;
     Reranker& reranker_;
     SessionManager& sessions_;
+    ConversationStore* conversations_ = nullptr;  // optional persistent memory
 
     bool ollama_ok_ = false;
     std::string chat_model_;       // "models.draft" - main answer model

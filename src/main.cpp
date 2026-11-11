@@ -284,9 +284,11 @@ int main(int argc, char** argv) {
     Retriever retriever(cfg, ollama, store, &bm25, &web);
     Reranker reranker(cfg, ollama);
     SessionManager sessions(static_cast<size_t>(cfg.max_history_messages));
+    ConversationStore conversations(cfg);  // data/memory: conversations + facts
     Indexer indexer(cfg, ollama, store, bm25);
     indexer.set_embedding_model(cfg.embedding_model);
-    RagPipeline pipeline(cfg, ollama, store, bm25, web, retriever, reranker, sessions);
+    RagPipeline pipeline(cfg, ollama, store, bm25, web, retriever, reranker, sessions,
+                         &conversations);
 
     // --- persisted index ----------------------------------------------------
     {
@@ -345,7 +347,7 @@ int main(int argc, char** argv) {
         return run_console(pipeline, indexer, cfg);
     }
 
-    HttpServer server(cfg, pipeline, indexer, sessions);
+    HttpServer server(cfg, pipeline, indexer, sessions, conversations);
     std::string serr;
     if (!server.start(&serr)) {
         log_error(serr);

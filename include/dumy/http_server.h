@@ -10,6 +10,7 @@
 #include <string>
 
 #include "dumy/config.h"
+#include "dumy/conversation_store.h"
 #include "dumy/indexer.h"
 #include "dumy/rag_pipeline.h"
 #include "dumy/session_manager.h"
@@ -19,7 +20,7 @@ namespace dumy {
 class HttpServer {
 public:
     HttpServer(const Config& cfg, RagPipeline& pipeline, Indexer& indexer,
-               SessionManager& sessions);
+               SessionManager& sessions, ConversationStore& conversations);
     ~HttpServer();  // defined in the .cpp where Impl is complete
 
     HttpServer(const HttpServer&) = delete;
@@ -36,6 +37,7 @@ private:
     RagPipeline& pipeline_;
     Indexer& indexer_;
     SessionManager& sessions_;
+    ConversationStore& store_;
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

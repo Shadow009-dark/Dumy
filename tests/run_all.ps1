@@ -71,6 +71,61 @@ function Test-TruncatedWord([string]$answer) {
     return $false
 }
 
+# ------------------------- memory test helpers (ASCII only) --------------
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+$baseUrl = "http://127.0.0.1:$port"
+
+function Read-Fixture([string]$name) {
+    $p = Join-Path $PSScriptRoot ("memory\" + $name)
+    if (-not (Test-Path $p)) { return $null }
+    return (Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json)
+}
+
+function Send-ChatBody($bodyObj, [string]$client, [string]$tag) {
+    $path = Join-Path $tmpDir ("mem-" + $tag + "-" + [guid]::NewGuid().ToString('N') + ".json")
+    [IO.File]::WriteAllText($path, ($bodyObj | ConvertTo-Json -Compress), $utf8)
+    $cargs = @('-s','-m','90','-o',($path + '.out'),'-w','%{http_code}',
+               '-H','Content-Type: application/json; charset=utf-8')
+    if ($client) { $cargs += @('-H', "X-Session-Id: $client") }
+    $cargs += @('--data-binary', "@$path", $chatUrl)
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $code = & curl.exe @cargs
+    $sw.Stop()
+    $raw = ''
+    if (Test-Path ($path + '.out')) { $raw = [IO.File]::ReadAllText(($path + '.out'), [Text.Encoding]::UTF8) }
+    $j = $null
+    try { $j = $raw | ConvertFrom-Json } catch { $j = $null }
+    return @{ code = [string]$code; json = $j; raw = $raw; seconds = [math]::Round($sw.Elapsed.TotalSeconds, 3) }
+}
+
+function Invoke-Api([string]$method, [string]$path, [string]$client, $bodyObj) {
+    $outFile = Join-Path $tmpDir ("api-" + [guid]::NewGuid().ToString('N') + ".txt")
+    $cargs = @('-s','-m','30','-X',$method,'-o',$outFile,'-w','%{http_code}')
+    if ($client) { $cargs += @('-H', "X-Session-Id: $client") }
+    if ($null -ne $bodyObj) {
+        $bp = Join-Path $tmpDir ("api-" + [guid]::NewGuid().ToString('N') + ".json")
+        [IO.File]::WriteAllText($bp, ($bodyObj | ConvertTo-Json -Compress), $utf8)
+        $cargs += @('-H','Content-Type: application/json; charset=utf-8','--data-binary',"@$bp")
+    }
+    $cargs += ($baseUrl + $path)
+    $code = & curl.exe @cargs
+    $raw = ''
+    if (Test-Path $outFile) { $raw = [IO.File]::ReadAllText($outFile, [Text.Encoding]::UTF8) }
+    $j = $null
+    try { $j = $raw | ConvertFrom-Json } catch { $j = $null }
+    return @{ code = [string]$code; json = $j; raw = $raw }
+}
+
+function Add-Row([string]$id, [bool]$ok, [double]$secs, [string]$problem, [string]$answer) {
+    $status = 'PASS'
+    if (-not $ok) { $script:failures++; $status = 'FAIL' }
+    $script:rows.Add([pscustomobject]@{
+        Case = $id; Status = $status; Seconds = $secs; Qtype = 'memory'
+        Pdf = 0; Problem = $problem; Answer = $answer
+    }) | Out-Null
+    Write-Host ("{0,-24} {1,-4} {2,6}s  {3}" -f $id, $status, $secs, $problem)
+}
+
 $listenerPid = Get-ListenerPid
 $server = $null
 $h = $null
@@ -227,6 +282,116 @@ foreach ($c in $cases) {
     }) | Out-Null
     Write-Host ("{0,-24} {1,-4} {2,6}s  pdf={3}  {4}" -f $c.id, $status, $seconds, $pdfSources, (($problems + $notes) -join '; '))
 }
+
+# ======================= PART 1: persistent memory ========================
+# All memory cases use the "suite" client namespace, so the user's own
+# conversations/facts in the default namespace are never touched.
+$memClient = 'suite'
+Invoke-Api 'DELETE' '/memory' $memClient $null | Out-Null
+
+$factB = Read-Fixture 'fact_statement.json'
+$r1 = Send-ChatBody $factB $memClient 'fact'
+Add-Row 'mem_fact_store' (($r1.code -eq '200') -and ($r1.json.memory_used -eq $true)) $r1.seconds '' ([string]$r1.json.answer)
+
+$m1 = Invoke-Api 'GET' '/memory' $memClient $null
+$factId = ''
+$factCount = 0
+if ($m1.json -and $null -ne $m1.json.count) { $factCount = [int]$m1.json.count }
+if ($factCount -ge 1) { $factId = [string]$m1.json.facts[0].id }
+Add-Row 'mem_fact_list' (($m1.code -eq '200') -and ($factCount -ge 1)) 0 ('count=' + $factCount) ''
+
+$askB = Read-Fixture 'fact_question.json'
+$r2 = Send-ChatBody $askB $memClient 'ask'
+$answered = ($r2.code -eq '200') -and ([string]$r2.json.answer -match '30') -and ($r2.json.memory_used -eq $true)
+Add-Row 'mem_fact_inject' $answered $r2.seconds ([string]$r2.json.answer) ([string]$r2.json.answer)
+$lat = $null
+if ($r2.json -and $null -ne $r2.json.latency_ms) { $lat = [double]$r2.json.latency_ms }
+Add-Row 'mem_step_latency' (($null -ne $lat) -and ($lat -lt 150)) 0 ('latency_ms=' + [string]$lat) ''
+
+if ($factId) { $del = Invoke-Api 'DELETE' (('/memory/' + $factId)) $memClient $null } else { $del = @{ code = '0' } }
+$m2 = Invoke-Api 'GET' '/memory' $memClient $null
+$r3 = Send-ChatBody $askB $memClient 'after'
+$cnt2 = 0
+if ($m2.json -and $null -ne $m2.json.count) { $cnt2 = [int]$m2.json.count }
+Add-Row 'mem_fact_delete' (($del.code -eq '200') -and ($cnt2 -eq 0) -and ($r3.json.memory_used -ne $true)) $r3.seconds ('count=' + $cnt2) ([string]$r3.json.answer)
+
+# --- disabled memory stores and injects nothing --------------------------
+$t0 = Invoke-Api 'POST' '/memory/toggle' $memClient @{ enabled = $false }
+$cowB = Read-Fixture 'cow_statement.json'
+$r4 = Send-ChatBody $cowB $memClient 'off'
+$m3 = Invoke-Api 'GET' '/memory' $memClient $null
+$cnt3 = 0
+if ($m3.json -and $null -ne $m3.json.count) { $cnt3 = [int]$m3.json.count }
+Add-Row 'mem_disabled' (($t0.json.enabled -eq $false) -and ($r4.json.memory_used -ne $true) -and ($cnt3 -eq 0)) $r4.seconds ('count=' + $cnt3) ([string]$r4.json.answer)
+Invoke-Api 'POST' '/memory/toggle' $memClient @{ enabled = $true } | Out-Null
+
+# --- memory never reaches PDF answers/citations --------------------------
+Send-ChatBody (Read-Fixture 'fact_statement.json') $memClient 'pre' | Out-Null
+$r6 = Send-ChatBody (Read-Fixture 'livestock.json') $memClient 'liv'
+$pdfCount = 0
+if ($r6.json -and $r6.json.sources) { $pdfCount = @($r6.json.sources | Where-Object { $_.type -eq 'pdf' }).Count }
+Add-Row 'mem_no_pdf_pollution' (($r6.code -eq '200') -and ($r6.json.memory_used -ne $true)) $r6.seconds ('pdf=' + $pdfCount) ([string]$r6.json.answer)
+
+# --- per-client isolation + path traversal --------------------------------
+$cA = Invoke-Api 'POST' '/conversations' 'alpha' @{}
+$cidA = ''
+if ($cA.json -and $cA.json.conversation) { $cidA = [string]$cA.json.conversation.id }
+$cross = Invoke-Api 'GET' (('/conversations/' + $cidA)) 'beta' $null
+$trav = Invoke-Api 'GET' '/conversations/..%2F..%2Fetc' $null $null
+Add-Row 'mem_isolation' (($cross.code -eq '404') -and (@('400','404') -contains $trav.code)) 0 ('cross=' + $cross.code + ' traversal=' + $trav.code) ''
+
+# --- corrupted store must not crash --------------------------------------
+$memDir = Join-Path $root 'data\memory\suite'
+New-Item -ItemType Directory -Force -Path $memDir | Out-Null
+[IO.File]::WriteAllText((Join-Path $memDir 'facts.json'), '{ this is not json', $utf8)
+$corrupt = Invoke-Api 'GET' '/memory' $memClient $null
+$afterCorrupt = Send-ChatBody $askB $memClient 'corrupt'
+Add-Row 'mem_corrupt_store' (($corrupt.code -eq '200') -and ($afterCorrupt.code -eq '200')) $afterCorrupt.seconds ('get=' + $corrupt.code) 'server survived a corrupt store'
+
+# --- 50 long facts + general question: clean answer, no HTTP 400 ---------
+$bigFacts = @()
+for ($i = 0; $i -lt 50; $i++) {
+    $bigFacts += @{ id = ("f-big-" + $i); text = ("uzun yaddas qeydi nomre " + $i); conversation_id = ''; created = 0 }
+}
+[IO.File]::WriteAllText((Join-Path $memDir 'facts.json'), (@{ facts = $bigFacts } | ConvertTo-Json -Depth 5 -Compress), $utf8)
+$r7 = Send-ChatBody (Read-Fixture 'long_context.json') $memClient 'big'
+Add-Row 'mem_oversized' (($r7.code -eq '200') -and (([string]$r7.json.answer).Length -gt 20)) $r7.seconds ('http=' + $r7.code) ([string]$r7.json.answer)
+Invoke-Api 'DELETE' '/memory' $memClient $null | Out-Null
+
+# --- deterministic paths stay fast and memory-free -----------------------
+$r8 = Send-ChatBody (Read-Fixture 'arithmetic.json') $memClient 'arith'
+Add-Row 'mem_fastpath' (($r8.code -eq '200') -and ([string]$r8.json.answer -match '180') -and ($r8.seconds -lt 0.2) -and ($r8.json.memory_used -ne $true)) $r8.seconds ([string]$r8.json.answer) ([string]$r8.json.answer)
+
+# --- UI static safety check (no browser tooling) -------------------------
+$htmlPath = Join-Path $root 'web\index.html'
+$html = ''
+if (Test-Path $htmlPath) { $html = [IO.File]::ReadAllText($htmlPath, [Text.Encoding]::UTF8) }
+$uiOk = ($html.Length -gt 1000) -and (-not ($html -match '(?i)<link\b')) -and
+        (-not ($html -match '(?i)@import')) -and (-not ($html -match 'src="http')) -and
+        (-not ($html -match '(?i)fonts\.')) -and (-not ($html -match 'innerHTML'))
+Add-Row 'ui_static_safe' $uiOk 0 'no CDN/fonts/innerHTML' 'static check only'
+
+# --- conversations survive a server restart ------------------------------
+$pc = Invoke-Api 'POST' '/conversations' $memClient @{}
+$pcid = ''
+if ($pc.json -and $pc.json.conversation) { $pcid = [string]$pc.json.conversation.id }
+$pm = Read-Fixture 'fact_statement.json'
+if ($pcid) { $pm | Add-Member -NotePropertyName conversation_id -NotePropertyValue $pcid -Force }
+Send-ChatBody $pm $memClient 'persist' | Out-Null
+if ($server) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 2
+$server = Start-Process -FilePath $exe -ArgumentList '--no-browser','--no-web' -WorkingDirectory $root -PassThru -WindowStyle Hidden
+$h = $null
+for ($i = 0; $i -lt 90; $i++) {
+    Start-Sleep -Seconds 2
+    $h = Get-Health
+    if ($h -and $h.warmup.main_ready) { break }
+}
+if ($h) { $identity = "$($h.build_id)|$($h.started_at)|$($h.pid)" }
+$gp = Invoke-Api 'GET' (('/conversations/' + $pcid)) $memClient $null
+$msgCount = 0
+if ($gp.json -and $gp.json.conversation) { $msgCount = @($gp.json.conversation.messages).Count }
+Add-Row 'mem_persist_restart' (($gp.code -eq '200') -and ($msgCount -ge 2)) 0 ('messages=' + $msgCount) ''
 
 # The server we launched must still be the same process with the same build.
 $healthError = ''

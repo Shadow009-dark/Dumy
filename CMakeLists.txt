@@ -107,6 +107,7 @@ set(DUMY_SOURCES
   src/rag_pipeline.cpp
   src/session_manager.cpp
   src/http_server.cpp
+  src/conversation_store.cpp
 )
 
 add_executable(dumy ${DUMY_SOURCES})

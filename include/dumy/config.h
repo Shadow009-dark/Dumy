@@ -52,6 +52,12 @@ struct Config {
     bool fast_mode = false;             // skip rerank + self-check for simple questions
     int request_timeout = 300;          // seconds per Ollama call
     int max_history_messages = 8;       // messages kept per session
+
+    // --- Persistent memory (conversations + long-term facts) ---------------
+    bool memory_enabled = true;             // conversations + "yaddaş" facts
+    int memory_max_facts = 50;              // hard cap on stored facts
+    int memory_injection_tokens = 160;      // memory prompt budget (capped at 500)
+    int conversation_retention_days = 0;    // 0 = keep conversations forever
     int rerank_top_n = 8;               // chunks kept after LLM reranking
     int rerank_max_candidates = 6;      // Step 4: max chunks sent to the LLM reranker
     float rerank_min_score = 8.0f;      // Step 3: keep only chunks scored >= this (0-10)

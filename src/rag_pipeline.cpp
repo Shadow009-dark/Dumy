@@ -371,8 +371,10 @@ nlohmann::json AnswerResult::sources_json() const {
 
 RagPipeline::RagPipeline(const Config& cfg, OllamaClient& ollama, VectorStorePtr store,
                          Bm25Index& bm25, WebSearch& web, Retriever& retriever,
-                         Reranker& reranker, SessionManager& sessions)
+                         Reranker& reranker, SessionManager& sessions,
+                         ConversationStore* conversations)
     : cfg_(cfg),
+      conversations_(conversations),
       ollama_(ollama),
       store_(std::move(store)),
       bm25_(bm25),
@@ -751,8 +753,32 @@ std::vector<Chunk> RagPipeline::diversify(const std::vector<Chunk>& chunks) cons
     return out.empty() ? chunks : out;
 }
 
+namespace {
+// A short message that only makes sense with the previous turn ("bəs onun
+// müalicəsi necədir?", "daha ətraflı yaz"). Conservative on purpose: a long
+// question or one without a reference marker is never rewritten.
+bool is_followup_question(const std::string& q) {
+    if (meaningful_word_count(q) > 8) return false;
+    const std::string f = " " + az_fold(q) + " ";
+    static const char* MARK[] = {" bes ",   " onun ",  " onlarin ", " daha ",
+                                 " etrafli ", " davam ", " bu ",      " o ",
+                                 " hansi ", " niye ",  " nece "};
+    for (const char* m : MARK)
+        if (f.find(m) != std::string::npos) return true;
+    return false;
+}
+}  // namespace
+
 AnswerResult RagPipeline::answer(const std::string& question,
                                  const std::string& session_id,
+                                 const StreamFn& on_delta,
+                                 const StatusFn& on_status) const {
+    return answer(question, session_id, MemoryRef{}, on_delta, on_status);
+}
+
+AnswerResult RagPipeline::answer(const std::string& question,
+                                 const std::string& session_id,
+                                 const MemoryRef& mem,
                                  const StreamFn& on_delta,
                                  const StatusFn& on_status) const {
     AnswerResult res;
@@ -944,6 +970,39 @@ AnswerResult RagPipeline::answer(const std::string& question,
         return res;
     }
 
+    // --- 1b2. Persistent memory: facts the user stated about themselves -----
+    // Deterministic and model-free, so it costs no latency and cannot be
+    // polluted by the model. It runs BEFORE the fact-checker so a personal
+    // statement is acknowledged instead of judged, and a personal question is
+    // answered from the stored fact (labelled [Söhbət yaddaşı]).
+    if (conversations_ && cfg_.memory_enabled && !mem.client.empty()) {
+        const std::string stored =
+            conversations_->remember_from_question(mem.client, q, mem.conversation);
+        if (!stored.empty()) {
+            log_info("memory: stored a new user fact");
+            res.qtype = "memory";
+            res.no_sources = true;
+            res.from_own_knowledge = true;
+            res.used_memory = true;
+            res.answer = "Yaddaşa yazdım: " + stored + ".\n\n[Söhbət yaddaşı]";
+            if (on_delta) on_delta(res.answer);
+            return res;
+        }
+        MemoryFact fact;
+        if (ConversationStore::best_fact_for(conversations_->facts(mem.client), q,
+                                             &fact)) {
+            log_info("memory: answered from a stored fact");
+            res.qtype = "memory";
+            res.no_sources = true;
+            res.from_own_knowledge = true;
+            res.used_memory = true;
+            res.answer =
+                "Yaddaşımda qeyd olunub: " + fact.text + ".\n\n[Söhbət yaddaşı]";
+            if (on_delta) on_delta(res.answer);
+            return res;
+        }
+    }
+
     // --- 1c. Declarative statement -> fact-check mode -----------------------
     // "Title: statement" is not a question: it needs a verdict, not an echoed
     // explanation. Running before retrieval also keeps general facts away from
@@ -1039,6 +1098,22 @@ AnswerResult RagPipeline::answer(const std::string& question,
                      (grammar ? "grammar" : "procedure/list") +
                      " -> honest refusal");
         } else {
+            // Memory goes into the general answer prompt only: the PDF and
+            // fact-check paths never see it, so it can never leak into a
+            // citation. The block is capped by memory_injection_tokens.
+            std::string memory_block;
+            if (conversations_ && cfg_.memory_enabled &&
+                cfg_.memory_injection_tokens > 0) {
+                memory_block = ConversationStore::build_memory_block(
+                    conversations_->facts(mem.client), q,
+                    static_cast<size_t>(cfg_.memory_injection_tokens),
+                    cfg_.token_chars_per_token > 0.0 ? cfg_.token_chars_per_token
+                                                     : 2.6);
+            }
+            auto with_memory = [&](std::string prompt) {
+                if (memory_block.empty()) return prompt;
+                return memory_block + "\n" + prompt;
+            };
             auto attempt = [&](const std::string& prompt,
                                const char* tag) -> std::string {
                 ChatOptions g_opts = cfg_.chat_options(
@@ -1080,8 +1155,8 @@ AnswerResult RagPipeline::answer(const std::string& question,
 
             AzWordStats ws;
             bool subject_ok = false;
-            std::string out = attempt(build_general_fact_user_message(q),
-                                      "general_direct");
+            std::string out = attempt(
+                with_memory(build_general_fact_user_message(q)), "general_direct");
             bool ok = accept(out, ws, subject_ok);
             log_info("general_direct: chars=" + std::to_string(out.size()) +
                      " sentences=" + std::to_string(fc_sentence_count(out)) +
@@ -1092,8 +1167,8 @@ AnswerResult RagPipeline::answer(const std::string& question,
             if (!ok) {
                 log_warn("general_direct: rejected, one clean retry; draft=[" +
                          utf8_prefix(out, 160) + "]");
-                std::string out2 =
-                    attempt(build_plain_answer_message(q), "general_retry");
+                std::string out2 = attempt(
+                    with_memory(build_plain_answer_message(q)), "general_retry");
                 AzWordStats ws2;
                 bool subject2 = false;
                 if (accept(out2, ws2, subject2)) {
@@ -1109,6 +1184,10 @@ AnswerResult RagPipeline::answer(const std::string& question,
             }
             if (ok) {
                 res.answer = out;
+                if (!memory_block.empty()) {
+                    res.used_memory = true;
+                    res.answer += "\n\n[Söhbət yaddaşı]";
+                }
             } else {
                 res.answer = OUT_OF_SCOPE_MESSAGE;
                 log_warn("general_direct: answer rejected - honest refusal; draft=[" +
@@ -1133,6 +1212,20 @@ AnswerResult RagPipeline::answer(const std::string& question,
     const double cpt = cfg_.token_chars_per_token > 0.0 ? cfg_.token_chars_per_token : 2.6;
     const double ms_route = t_route.ms();
 
+    // --- 2a2. follow-up rewrite --------------------------------------------
+    // "bəs onun müalicəsi necədir?" is meaningless to the retriever on its own;
+    // the previous user topic is prepended for RETRIEVAL ONLY (the fact-check
+    // path returns before this point, so memory never reaches a verdict).
+    std::string q_retrieval = q;
+    if (conversations_ && !mem.conversation.empty() && is_followup_question(q)) {
+        const std::string prev =
+            conversations_->last_user_text(mem.client, mem.conversation);
+        if (prev.size() >= 8 && az_fold(prev) != az_fold(q)) {
+            q_retrieval = prev + " - " + q;
+            log_info("follow-up: retrieval query inherits the previous topic");
+        }
+    }
+
     // --- 2b. query expansion (one model call, helper model) ----------------
     StageTimer t_expand;
     // Expansion is an extra model call; general/off-topic and low-information
@@ -1141,7 +1234,8 @@ AnswerResult RagPipeline::answer(const std::string& question,
         short_non_topic ||
         (qtype == QuestionType::General && cfg_.expansion_skip_for_general);
     const std::vector<std::string> queries =
-        skip_expansion ? std::vector<std::string>{q} : retriever_.expand_query(q, qtype);
+        skip_expansion ? std::vector<std::string>{q_retrieval}
+                       : retriever_.expand_query(q_retrieval, qtype);
     const double ms_expand = t_expand.ms();
     log_info("expansion queries (" + std::to_string(queries.size()) +
              (skip_expansion ? ", skipped" : "") + "): " + join(queries, " | "));
@@ -1175,7 +1269,8 @@ AnswerResult RagPipeline::answer(const std::string& question,
     if (web_enabled) {
         web_fut = std::async(std::launch::async, [&] {
             WebOut o;
-            o.chunks = retriever_.retrieve_web(q, queries, (size_t)top_k, &o.warning);
+            o.chunks =
+                retriever_.retrieve_web(q_retrieval, queries, (size_t)top_k, &o.warning);
             return o;
         });
     }
