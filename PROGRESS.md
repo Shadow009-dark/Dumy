@@ -132,3 +132,9 @@ MSVC + vcpkg (curl, nlohmann-json, cpp-httplib, poppler).
 - C2 folding audit list recorded: dead "qeyd:"/"menbe:"/"deyisiklik:" comparisons fixed; live folded-to-folded comparisons verified correct; B2 negative fixtures still not in the suite.
 - C4 evidence: plain gestation question returns 1 chunk and the honest refusal; "cavab ver:" variant returns 5 chunks and 240-312 gün.
 - Branch wip/retrieval created from feature/memory-ui c550d62.
+
+## 2026-11-14 — D1/D2 trace
+- /chat returns trace only with debug_trace_enabled + loopback + "debug": true; verified present/absent in all three states.
+- Debug runs pass an empty MemoryRef and skip append_turn, so they are stateless.
+- Trace report: test_results/debug_report.md, 22 questions, 11 refusals, median 9.7 s.
+- D2: all three gestation variants retrieve the identical 6 chunks (max 0.683-0.689, min_score 0.5, expansion skipped); only generation differs, so recall does not diverge.
