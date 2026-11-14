@@ -1309,7 +1309,10 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     const bool fast_path =
         cfg_.fast_path_enabled && qtype == QuestionType::SimpleFact &&
         meaningful_word_count(q) <= static_cast<size_t>(std::max(1, cfg_.fast_path_max_words));
-    const int top_k = retriever_.top_k_for(qtype);
+    int top_k = retriever_.top_k_for(qtype);
+    if (const char* tk = std::getenv("DUMY_TOPK")) {
+        try { top_k = std::max(1, std::stoi(tk)); } catch (...) {}
+    }
     const double cpt = cfg_.token_chars_per_token > 0.0 ? cfg_.token_chars_per_token : 2.6;
     const double ms_route = t_route.ms();
 
@@ -1625,7 +1628,11 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     // Tuned sampling (P3): temperature 0.25 with top_p 0.9 and
     // repeat_penalty 1.1 - the previous draft used 0.3 and sent neither
     // top_p nor repeat_penalty to Ollama at all.
-    ChatOptions draft_opts = cfg_.chat_options(cfg_.num_predict_draft, 0.25);
+    double draft_temp = 0.25;
+    if (const char* tp = std::getenv("DUMY_TEMP")) {
+        try { draft_temp = std::stod(tp); } catch (...) {}
+    }
+    ChatOptions draft_opts = cfg_.chat_options(cfg_.num_predict_draft, draft_temp);
     StageTimer t_draft;
     std::string derr;
     std::string draft;

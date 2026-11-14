@@ -144,3 +144,9 @@ MSVC + vcpkg (curl, nlohmann-json, cpp-httplib, poppler).
 - Trace now carries meta_class and an attempts list (draft, draft_regen, strict_retry) with raw 400 chars, length, ms, done_reason, verdict/reason.
 - Verified live on a refusal question: meta and attempt records appear in the trace.
 - Per-chunk vector/fused scores skipped: retrieval returns only max_score/margin, chunks carry no score.
+
+## 2026-11-14 — E0 green, E2 harness
+- Full suite with the E1 trace build: 84/84 passed, 0 warnings.
+- DUMY_TEMP and DUMY_TOPK env overrides added so the variance experiment can change sampling without touching config.json.
+- tests/variance.py written: 6 questions x 5 runs x 4 configs (baseline, 0.1, 0, top3), writes test_results/variance.md after every run.
+- Seed is not exposed by ChatOptions, so the temp0 config runs without a fixed seed and the report says so.
