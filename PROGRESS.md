@@ -138,3 +138,9 @@ MSVC + vcpkg (curl, nlohmann-json, cpp-httplib, poppler).
 - Debug runs pass an empty MemoryRef and skip append_turn, so they are stateless.
 - Trace report: test_results/debug_report.md, 22 questions, 11 refusals, median 9.7 s.
 - D2: all three gestation variants retrieve the identical 6 chunks (max 0.683-0.689, min_score 0.5, expansion skipped); only generation differs, so recall does not diverge.
+
+## 2026-11-14 — E0/E1
+- The trace change builds clean; a full suite was started before the interruption and never reached its report.
+- Trace now carries meta_class and an attempts list (draft, draft_regen, strict_retry) with raw 400 chars, length, ms, done_reason, verdict/reason.
+- Verified live on a refusal question: meta and attempt records appear in the trace.
+- Per-chunk vector/fused scores skipped: retrieval returns only max_score/margin, chunks carry no score.

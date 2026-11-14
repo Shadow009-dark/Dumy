@@ -835,6 +835,8 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
                                       const StreamFn& on_delta,
                                       const StatusFn& on_status) const {
     AnswerResult res;
+    nlohmann::json trace_attempts = nlohmann::json::array();
+    std::string trace_meta = "none";
     StageTimer t_total;
     const std::string q_original = trim(question);
     // Restore Azerbaijani letters for routing/retrieval only when the input is
@@ -851,6 +853,7 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     // a topic: it is resolved here before routing and retrieval.
     {
         const MetaResult meta = classify_meta(q);
+        trace_meta = meta_kind_name(meta.kind);
         if (meta.kind != MetaKind::None) {
             std::string target;
             if (meta.has_content) {
@@ -1641,6 +1644,11 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
                        draft_timing.prompt_eval_ms, draft_timing.eval_ms,
                        draft_timing.prompt_tokens, draft_timing.eval_tokens,
                        draft_timing.done_reason);
+        trace_attempts.push_back({{"attempt", attempt + 1}, {"purpose", "draft"},
+                                  {"raw", utf8_prefix(draft, 400)},
+                                  {"chars", draft.size()},
+                                  {"done", draft_timing.done_reason},
+                                  {"ms", (int)t_draft.ms()}});
         if (!draft.empty()) break;
         const bool too_large = derr.find("context") != std::string::npos ||
                                derr.find("exceeds") != std::string::npos ||
@@ -1678,6 +1686,11 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
                  " done_reason=" +
                  (regen_timing.done_reason.empty() ? std::string("?")
                                                     : regen_timing.done_reason));
+        trace_attempts.push_back({{"attempt", 0}, {"purpose", "draft_regen"},
+                                  {"raw", utf8_prefix(again, 400)},
+                                  {"chars", again.size()},
+                                  {"done", regen_timing.done_reason},
+                                  {"ms", (int)t_regen.ms()}});
         if (!again.empty()) {
             draft = again;
             draft_timing = regen_timing;
@@ -1926,6 +1939,15 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
                               !has_repetition_loop(retry) &&
                               (!off_domain || !answer_uses_domain_markers(retry)) &&
                               (degenerate || retry.size() > final_answer.size());
+        trace_attempts.push_back({{"attempt", 0}, {"purpose", "strict_retry"},
+                                  {"raw", utf8_prefix(retry, 400)},
+                                  {"chars", retry.size()},
+                                  {"verdict", retry_ok ? "accepted" : "rejected"},
+                                  {"reason", std::string(degenerate ? "degenerate " : "") +
+                                                 (repetitive ? "repetition " : "") +
+                                                 (off_domain ? "off_domain " : "") +
+                                                 (too_short ? "too_short" : "")},
+                                  {"ms", (int)t_strict.ms()}});
         if (retry_ok) {
             final_answer = retry;
             log_info("quality gate: strict retry accepted (" +
@@ -2009,6 +2031,8 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
                                     : "full path: rerank + diversify";
         t["query"] = q;
         t["rewritten"] = q_retrieval;
+        t["meta_class"] = trace_meta;
+        t["attempts"] = trace_attempts;
         t["expansion"] = {{"skipped", skip_expansion}, {"queries", qs}};
         t["retrieval"] = {{"top_k", top_k},
                            {"max_score", pdf_result.max_score},
