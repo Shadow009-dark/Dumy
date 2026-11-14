@@ -1,4 +1,4 @@
-// rag_pipeline.h - the full quality pipeline:
+﻿// rag_pipeline.h - the full quality pipeline:
 //   analyze -> expand -> parallel (PDF hybrid + web) -> rerank ->
 //   context build (map-reduce if too large) -> draft (streamed) ->
 //   self-check -> labels + safety + sources footer.
@@ -55,6 +55,7 @@ struct AnswerResult {
     bool safety_warning = false;        // UI shows the veterinary badge
     std::string warning;                // pipeline-level warning ("" = none)
 
+    nlohmann::json trace;               // debug trace (D1); empty when off
     nlohmann::json sources_json() const;  // REST-friendly source list
 };
 

@@ -1993,6 +1993,43 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
         res.warning = "web_failed: " + web_out.warning;
     }
     res.safety_warning = needs_safety_warning(q);
+    // --- debug trace: collected always, returned only for a debug request ---
+    {
+        nlohmann::json pc = nlohmann::json::array();
+        for (const auto& c : pdf_chunks)
+            pc.push_back({{"source", c.source}, {"page", c.page}});
+        nlohmann::json sel = nlohmann::json::array();
+        for (const auto& c : selected)
+            sel.push_back({{"source", c.source}, {"page", c.page}});
+        nlohmann::json qs = nlohmann::json::array();
+        for (const auto& x : queries) qs.push_back(x);
+        nlohmann::json t;
+        t["route"] = res.qtype;
+        t["route_why"] = fast_path ? "fast_path: simple fact, rerank skipped"
+                                    : "full path: rerank + diversify";
+        t["query"] = q;
+        t["rewritten"] = q_retrieval;
+        t["expansion"] = {{"skipped", skip_expansion}, {"queries", qs}};
+        t["retrieval"] = {{"top_k", top_k},
+                           {"max_score", pdf_result.max_score},
+                           {"min_score", cfg_.min_score},
+                           {"dropped_by_min_score",
+                            pdf_result.max_score > 0.0f && pdf_result.max_score < cfg_.min_score},
+                           {"chunks", pc}};
+        t["selected"] = sel;
+        t["prompt"] = messages.empty() ? std::string()
+                                        : utf8_prefix(messages.back().content, 6000);
+        t["sampling"] = {{"model", chat_model_},
+                          {"num_predict", cfg_.num_predict_draft},
+                          {"num_ctx", cfg_.num_ctx},
+                          {"temperature", 0.25}};
+        t["timings_ms"] = {{"route", ms_route}, {"expand", ms_expand},
+                            {"pdf", ms_pdf}, {"web", ms_web},
+                            {"rerank", ms_rerank}, {"draft", ms_draft},
+                            {"self_check", ms_check}, {"post", t_post.ms()},
+                            {"total", t_total.ms()}};
+        res.trace = t;
+    }
     res.answer = final_answer;
     const double ms_post = t_post.ms();
     const double ms_total = t_total.ms();

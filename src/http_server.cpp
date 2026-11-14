@@ -428,23 +428,28 @@ bool HttpServer::start(std::string* err) {
 
         const auto t_start = std::chrono::steady_clock::now();
         try {
-            AnswerResult r = pipeline_.answer(
-                message, session_id, MemoryRef{client, conversation_id}, nullptr);
+            const bool is_loop = req.remote_addr == "127.0.0.1" ||
+                req.remote_addr == "::1" || req.remote_addr == "::ffff:127.0.0.1";
+            const bool want_debug =
+                cfg_.debug_trace_enabled && is_loop && body.value("debug", false);
+            AnswerResult r = want_debug
+                                 ? pipeline_.answer(message, session_id, MemoryRef{}, nullptr)
+                                 : pipeline_.answer(message, session_id,
+                                                    MemoryRef{client, conversation_id}, nullptr);
             const long long latency_ms =
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - t_start)
                     .count();
-            if (cfg_.memory_enabled)
+            if (cfg_.memory_enabled && !want_debug)
                 store_.append_turn(client, conversation_id, message, r.answer,
                                    r.qtype, source_labels(r), latency_ms);
-            reply_json(req, res, 200,
-                       {{"session_id", session_id},
+            nlohmann::json out = {
+                        {"session_id", session_id},
                         {"conversation_id", conversation_id},
                         {"memory_used", r.used_memory},
                         {"latency_ms", latency_ms},
                         {"route", r.qtype},
                         {"notes_ui", notes_json(r)},
-                        // sanitize: an invalid UTF-8 byte would make dump() throw
                         {"answer", sanitize_utf8(r.answer)},
                         {"sources", r.sources_json()},
                         {"qtype", r.qtype},
@@ -454,7 +459,9 @@ bool HttpServer::start(std::string* err) {
                         {"own_knowledge", r.from_own_knowledge},
                         {"self_check_failed", r.self_check_failed},
                         {"self_check_retries", r.self_check_retries},
-                        {"warning", r.warning}});
+                        {"warning", r.warning}};
+            if (want_debug) out["trace"] = r.trace;
+            reply_json(req, res, 200, out);
         } catch (const std::exception& e) {
             reply_json(req, res, 500, {{"error", std::string("pipeline error: ") + e.what()}});
         }

@@ -127,3 +127,8 @@ MSVC + vcpkg (curl, nlohmann-json, cpp-httplib, poppler).
 - Question: "Gündəlik süd verimini necə artırmaq olar?" on an idle machine (gemma3:4b 100% GPU, bge-m3 CPU): 30.9 s / 30.1 s / 11.7 s, PDF sources 1/1/1, route simple_fact, two 95-char honest failures then a 689-char answer.
 - The source count is stable at 1, so the earlier "5" was a different observation, not a regression; the 30 s misses are model-side stalls, content is the same on every run.
 - run_all.ps1 now retries a slow case up to 3 times and judges the latency cap on the best run (content from that run); the 30 s cap is unchanged.
+
+## 2026-11-14 — C2/C4 notes closed
+- C2 folding audit list recorded: dead "qeyd:"/"menbe:"/"deyisiklik:" comparisons fixed; live folded-to-folded comparisons verified correct; B2 negative fixtures still not in the suite.
+- C4 evidence: plain gestation question returns 1 chunk and the honest refusal; "cavab ver:" variant returns 5 chunks and 240-312 gün.
+- Branch wip/retrieval created from feature/memory-ui c550d62.
