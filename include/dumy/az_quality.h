@@ -999,8 +999,142 @@ inline std::string build_feed_calculation_answer(const std::string& question) {
 // The API's `answer` field must be the answer only. Source labels, "Qeyd:",
 // "Dəyişiklik:", preambles and closing offers are removed here; the same
 // information is carried by sources_json() and the notes_ui flags.
+// A token of a line with its byte offsets and its folded (case-, diacritic-
+// and punctuation-free) form. az_fold() turns ':' into a space, so markers
+// MUST be compared as words, never as "qeyd:" substrings.
+struct AnswerToken {
+    size_t begin = 0;
+    size_t end = 0;
+    std::string folded;
+};
+
+inline std::vector<AnswerToken> answer_tokens(const std::string& raw_line) {
+    // Normalise the fullwidth colon (U+FF1A) so "Qeyd：..." tokenises like
+    // "Qeyd: ..."; az_fold would otherwise merge the label into the content.
+    std::string line;
+    for (size_t i = 0; i < raw_line.size();) {
+        if (i + 2 < raw_line.size() &&
+            static_cast<unsigned char>(raw_line[i]) == 0xEF &&
+            static_cast<unsigned char>(raw_line[i + 1]) == 0xBC &&
+            static_cast<unsigned char>(raw_line[i + 2]) == 0x9A) {
+            line += ':';
+            i += 3;
+        } else {
+            line += raw_line[i++];
+        }
+    }
+    std::vector<AnswerToken> out;
+    size_t i = 0;
+    while (i < line.size()) {
+        while (i < line.size()) {
+            const unsigned char c = static_cast<unsigned char>(line[i]);
+            if (c < 0x80 && (std::isspace(c) || std::ispunct(c))) ++i;
+            else break;
+        }
+        if (i >= line.size()) break;
+        const size_t begin = i;
+        while (i < line.size()) {
+            const unsigned char c = static_cast<unsigned char>(line[i]);
+            if (c < 0x80 && (std::isspace(c) || std::ispunct(c))) break;
+            ++i;
+        }
+        if (i > begin)
+            out.push_back({begin, i, az_fold(line.substr(begin, i - begin))});
+    }
+    return out;
+}
+
+inline bool is_answer_marker_word(const std::string& f) {
+    static const char* words[] = {"qeyd",    "qeydler", "qeydi",    "qeydler",
+                                  "menbe",   "menbeler", "menbeye", "menbeleri",
+                                  "menbeyi", "menbelerin", "pdf",  "deyisiklik",
+                                  "deyisiklikler", "note", "notes", "nb", "sources"};
+    for (const char* w : words)
+        if (f == w) return true;
+    return false;
+}
+
+inline std::string normalize_answer_colons(const std::string& raw) {
+    std::string out;
+    out.reserve(raw.size());
+    for (size_t i = 0; i < raw.size();) {
+        if (i + 2 < raw.size() && static_cast<unsigned char>(raw[i]) == 0xEF &&
+            static_cast<unsigned char>(raw[i + 1]) == 0xBC &&
+            static_cast<unsigned char>(raw[i + 2]) == 0x9A) {  // fullwidth '：'
+            out += ':';
+            i += 3;
+        } else {
+            out += raw[i++];
+        }
+    }
+    return out;
+}
+
+// A marker is a LABEL only when a colon follows it (after markdown/bullet
+// punctuation). "Yaddaşımda qeyd olunub: 30 qoyunum var." is content, not meta.
+inline bool marker_has_colon(const std::string& line, size_t end) {
+    size_t i = end;
+    while (i < line.size()) {
+        const char c = line[i];
+        if (c == ' ' || c == '*' || c == '_' || c == '#' || c == '-' || c == '.')
+            ++i;
+        else
+            break;
+    }
+    return i < line.size() && line[i] == ':';
+}
+
+// Byte offset of the first meta marker in the line (npos when clean).
+inline size_t answer_marker_pos(const std::string& raw) {
+    const std::string line = normalize_answer_colons(raw);
+    for (const auto& t : answer_tokens(line))
+        if (is_answer_marker_word(t.folded) && marker_has_colon(line, t.end))
+            return t.begin;
+    return std::string::npos;
+}
+
+// "Qeyd: Su 100 °C-də qaynayır." -> "Su 100 °C-də qaynayır."
+// "Su qaynayır. Qeyd: ..."      -> "Su qaynayır."
+inline std::string cut_answer_marker(const std::string& line) {
+    const size_t pos = answer_marker_pos(line);
+    if (pos == std::string::npos) return line;
+    const auto toks = answer_tokens(line);
+    const bool leading = !toks.empty() && pos == toks.front().begin;
+    if (leading) {
+        size_t cut = toks.front().end;
+        // eat the label separator: ':', '-', '*', '.', spaces, UTF-8 colon
+        while (cut < line.size()) {
+            const unsigned char c = static_cast<unsigned char>(line[cut]);
+            if (c < 0x80 && (std::isspace(c) || c == ':' || c == '-' || c == '*' ||
+                             c == '.' || c == '#' || c == '_')) {
+                ++cut;
+                continue;
+            }
+            if (c == 0xEF && cut + 2 < line.size() &&
+                static_cast<unsigned char>(line[cut + 1]) == 0xBC &&
+                static_cast<unsigned char>(line[cut + 2]) == 0x9A) {  // '：'
+                cut += 3;
+                continue;
+            }
+            break;
+        }
+        const std::string rest = trim(line.substr(cut));
+        // "Mənbə: kitab.pdf, səh. 4" leaves a bare reference behind: every
+        // remaining marker makes the whole line meta, so drop it entirely.
+        if (answer_marker_pos(rest) != std::string::npos) return std::string();
+        if (rest.empty()) return rest;
+        // A stranded list number ("1. Qeyd: ..." -> "1.") is noise.
+        bool digits_only = true;
+        for (char c : rest)
+            if (!(c >= '0' && c <= '9') && c != '.') { digits_only = false; break; }
+        if (digits_only) return std::string();
+        return rest;
+    }
+    return trim(line.substr(0, pos));
+}
+
 inline bool is_answer_meta_line(const std::string& folded) {
-    // Strip a list marker first: "- Qeyd: ..." and "1. Qeyd: ..." are meta too.
+    // First word of the folded line (colons became spaces already).
     size_t i = 0;
     while (i < folded.size() && (folded[i] == '-' || folded[i] == '*' || folded[i] == ' '))
         ++i;
@@ -1008,13 +1142,15 @@ inline bool is_answer_meta_line(const std::string& folded) {
     while (j < folded.size() && folded[j] >= '0' && folded[j] <= '9') ++j;
     if (j > i && j < folded.size() && folded[j] == '.') i = j + 1;
     while (i < folded.size() && folded[i] == ' ') ++i;
-    const std::string head = folded.substr(i);
-    static const char* PREFIX[] = {"qeyd:",   "qeyd -",  "deyisiklik:",
-                                   "menbe:",  "menbeler:", "istifade olunan menbeler",
-                                   "sources:", "xulase:", "sual:",
-                                   "cavab:"};
+    size_t k = i;
+    while (k < folded.size() && folded[k] != ' ') ++k;
+    const std::string head = folded.substr(i, k - i);
+    if (!head.empty() && is_answer_marker_word(head)) return true;
+    // "sual" is deliberately absent: it prefixes real sentences such as
+    // "Sualınızı yazın." and would swallow a valid answer.
+    static const char* PREFIX[] = {"deyisiklik", "istifade olunan menbeler"};
     for (const char* p : PREFIX) {
-        if (head.rfind(p, 0) == 0) return true;
+        if (folded.compare(i, std::string(p).size(), p) == 0) return true;
     }
     static const char* ANYWHERE[] = {
         "esasinda verilib",
@@ -1039,7 +1175,6 @@ inline std::string filter_answer_sentences(const std::string& line) {
         const std::string f = az_fold(t);
         if (!t.empty() && !is_answer_meta_line(f) &&
             f.find("esasinda verilib") == std::string::npos &&
-            f.find("qeyd:") == std::string::npos &&
             f.find("vacib qerarlar ucun menbeni yoxlayin") == std::string::npos) {
             if (!out.empty()) out += " ";
             out += t;
@@ -1084,9 +1219,15 @@ inline std::string clean_answer_text(const std::string& in) {
         const size_t nl = s.find('\n', start);
         const std::string line =
             nl == std::string::npos ? s.substr(start) : s.substr(start, nl - start);
-        if (!is_answer_meta_line(az_fold(trim(line)))) {
-            kept += filter_answer_sentences(line);
-            kept += '\n';
+        // Strip a leading label and cut a trailing meta sentence, then check
+        // the whole line for disclaimers that survive as a sentence.
+        const std::string cut = cut_answer_marker(line);
+        if (!trim(cut).empty() && !is_answer_meta_line(az_fold(trim(cut)))) {
+            const std::string body = filter_answer_sentences(cut);
+            if (!trim(body).empty()) {
+                kept += body;
+                kept += '\n';
+            }
         }
         if (nl == std::string::npos) break;
         start = nl + 1;

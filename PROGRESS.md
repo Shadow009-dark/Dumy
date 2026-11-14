@@ -89,3 +89,23 @@ MSVC + vcpkg (curl, nlohmann-json, cpp-httplib, poppler).
 - DuckDuckGo HTML search + Wikipedia fallback, kill switch, 10-minute cache.
 - API key, per-IP rate limit, CORS allow-list, loopback-only upload/ingest.
 - `tests/run_all.ps1` + `tests/expected/cases.json` regression suite.
+
+## 2026-11-14 — A1 (answer filter root cause)
+- q06 cause: az_fold() converts ':' to a space, so every "qeyd:" / "menbe:" comparison in the filter was dead code.
+- Added token-based answer_tokens / answer_marker_pos / cut_answer_marker (markdown, bullets, casing, fullwidth colon, mid-line).
+- Single choke point: clean_answer_text (used by both answer() overloads); the belt-and-braces scrub now reuses cut_answer_marker.
+- Added loopback-only GET /debug/sanitize and a 15-variant regression case `sanitize_markers`.
+- q06 verified clean 3/3 manually; full suite run pending before commit.
+
+## 2026-11-14 — A1 verified, commit blocked
+- Filter now strips 15/15 marker variants (markdown, list numbers, fullwidth colon, mid-line, bare .pdf refs); q06 clean 3/3 live runs.
+- Full suite is RED: mem_fact_inject returns an answer but memory_used=false (0.05 s, deterministic memory path). Not caused by the filter change as far as the evidence shows; needs a focused look.
+- No commit made (gate requires a green suite). A2 (quick mode), A3 (follow-ups), A4 (labels), A5 (latency) not started.
+
+- Follow-up: removed the over-broad "sual" prefix that deleted the fixed clarification sentence.
+
+## 2026-11-14 — B-batch (memory flag, debug gate)
+- mem_fact_inject root cause: the marker word "qeyd" matched the legitimate sentence "Yaddaşımda qeyd olunub: ..." and truncated it; markers now require a colon.
+- Probes: memory store/ask both memory_used=true, sources ["memory"], answer keeps "30"; q06 clean 5/5; /debug/sanitize 404 with the flag off, 200 with DUMMY_DEBUG_TRACE=1.
+- Suite still red: t16_pdf_diagnosis (answer ends mid-word, 5 pdf sources) and sanitize_markers (bare "Mənbə: file.pdf" leaves a .pdf token that the colon rule no longer flags).
+- All work committed to wip/step1 only; feature/memory-ui kept dirty with the same tree.

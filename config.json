@@ -70,6 +70,7 @@
   "request_timeout": 300,
   "max_history_messages": 8,
   "memory_enabled": true,
+  "debug_trace_enabled": false,
   "memory_max_facts": 50,
   "memory_injection_tokens": 160,
   "conversation_retention_days": 0,

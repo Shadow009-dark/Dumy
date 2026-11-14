@@ -8,6 +8,7 @@
 
 #include "dumy/chunker.h"
 #include "dumy/common.h"
+#include "dumy/meta_commands.h"
 
 namespace dumy {
 
@@ -59,6 +60,10 @@ void Retriever::set_models(const std::string& chat_model, const std::string& hel
 
 QuestionType Retriever::analyze(const std::string& question) const {
     const std::string q = " " + to_lower_utf8(question) + " ";
+
+    // A bare topic ("... haqqında", "... barədə") is an implicit request for
+    // an overview, not a factual question and never a claim.
+    if (is_topic_fragment(question)) return QuestionType::BroadTopic;
 
     // Comparison first ("fərq", "müqayisə", "vs").
     if (contains_any(q, {"fərq", "müqayis", " müqayis", "vs", " yoxsa ", " nə yaxşı",

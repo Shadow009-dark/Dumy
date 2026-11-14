@@ -367,6 +367,24 @@ bool HttpServer::start(std::string* err) {
         reply_json(req, res, 200, {{"documents", indexer_.documents_json()}});
     });
 
+    // --- GET /debug/sanitize: loopback-only answer-filter check ------------
+    // Takes any text and returns what the single choke point would emit. No
+    // user data, no retrieval, no model: used by the regression suite to
+    // prove every marker variant is stripped.
+    svr.Get("/debug/sanitize", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!cfg_.debug_trace_enabled) {
+            reply_json(req, res, 404, {{"error", "tapılmadı (404)"}});
+            return;
+        }
+        const std::string remote = req.remote_addr;
+        if (remote != "127.0.0.1" && remote != "::1" && remote != "::ffff:127.0.0.1") {
+            reply_json(req, res, 403, {{"error", "yalnız lokal"}});
+            return;
+        }
+        const std::string text = req.has_param("text") ? req.get_param_value("text") : "";
+        reply_json(req, res, 200, {{"input", text}, {"output", clean_answer_text(text)}});
+    });
+
     // --- POST /chat --------------------------------------------------------
     svr.Post("/chat", [this](const httplib::Request& req, httplib::Response& res) {
         if (!check_api_access(req, res, true)) return;

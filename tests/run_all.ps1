@@ -1,4 +1,6 @@
 ﻿# DUMY regression suite (PowerShell 5.1+, Windows)
+param([switch]$Quick)
+$env:DUMMY_DEBUG_TRACE = "1"
 #
 # Safety rules (ADD-2):
 #  - refuses to run if port 8085 is held by a process it did not start
@@ -396,6 +398,52 @@ $uiOk = ($html.Length -gt 1000) -and (-not ($html -match '(?i)<link\b')) -and
         ($html -match 'Ctrl\+Shift\+M|ctrlKey')
 Add-Row 'ui_static_safe' $uiOk 0 'no CDN/fonts/innerHTML' 'static check only'
 
+
+
+# --- A1: the answer filter strips every marker variant -------------------
+$variants = Get-Content (Join-Path $PSScriptRoot 'memory\sanitize_variants.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$badVariants = 0
+$firstBad = ''
+foreach ($v in $variants) {
+    $enc = [uri]::EscapeDataString([string]$v)
+    $out = & curl.exe -s --max-time 10 ($baseUrl + '/debug/sanitize?text=' + $enc)
+    $j = $null
+    try { $j = $out | ConvertFrom-Json } catch { $j = $null }
+    $o = [string]$j.output
+    if ($o -match '(?i)qeyd|mənbə|menbe|dəyişiklik|deyisiklik|\.pdf|əsasında verilib') {
+        $badVariants++
+        if (-not $firstBad) { $firstBad = $o }
+    }
+}
+Add-Row 'sanitize_markers' ($badVariants -eq 0) 0 ('variants=' + @($variants).Count + ' bad=' + $badVariants) $firstBad
+# --- Step 1: conversational meta commands (conversation sequences) --------
+$s1 = 'step1-' + [guid]::NewGuid().ToString('N')
+$frag = Read-Fixture 'step1_fragment.json'
+$sw1 = Get-Date
+$r1 = Send-ChatBody @{ message = $frag.message; session_id = $s1 } $s1 'step1a'
+$okFrag = ($r1.code -eq '200') -and ([string]$r1.json.answer).Length -gt 80 -and $r1.json.route -ne 'meta'
+Add-Row 'step1_fragment' $okFrag ((Get-Date) - $sw1).TotalSeconds ('route=' + $r1.json.route) ([string]$r1.json.answer)
+
+$follow = Read-Fixture 'step1_followup.json'
+$sw2 = Get-Date
+$r2 = Send-ChatBody @{ message = $follow.message; session_id = $s1 } $s1 'step1b'
+$okFollow = ($r2.code -eq '200') -and ([string]$r2.json.answer).Length -gt 80 -and $r2.json.route -ne 'meta'
+Add-Row 'step1_followup' $okFollow ((Get-Date) - $sw2).TotalSeconds ('route=' + $r2.json.route) ([string]$r2.json.answer)
+
+$s2 = 'step1b-' + [guid]::NewGuid().ToString('N')
+$metaOnly = Read-Fixture 'step1_meta_only.json'
+$sw3 = Get-Date
+$r3 = Send-ChatBody @{ message = $metaOnly.message; session_id = $s2 } $s2 'step1c'
+$elapsed3 = ((Get-Date) - $sw3).TotalSeconds
+$expected = (Get-Content (Join-Path $PSScriptRoot 'memory\step1_expected.txt') -Raw -Encoding UTF8).Trim()
+$okMeta = ($r3.code -eq '200') -and (([string]$r3.json.answer).Trim() -eq $expected) -and ($elapsed3 -lt 3)
+Add-Row 'step1_meta_first' $okMeta $elapsed3 'fixed clarification, no model call' ([string]$r3.json.answer)
+
+$mixed = Read-Fixture 'step1_mixed.json'
+$sw4 = Get-Date
+$r4 = Send-ChatBody @{ message = $mixed.message; session_id = $s1 } $s1 'step1d'
+$okMixed = ($r4.code -eq '200') -and ([string]$r4.json.answer).Length -gt 60 -and $r4.json.route -ne 'meta'
+Add-Row 'step1_mixed' $okMixed ((Get-Date) - $sw4).TotalSeconds ('route=' + $r4.json.route) ([string]$r4.json.answer)
 # --- conversations survive a server restart ------------------------------
 $pc = Invoke-Api 'POST' '/conversations' $memClient @{}
 $pcid = ''

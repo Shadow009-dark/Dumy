@@ -16,3 +16,7 @@ vcpkg_installed/
 test_results/
 payloads*.json
 data/memory/
+
+# local tools (never commit binaries)
+tools/
+*.exe

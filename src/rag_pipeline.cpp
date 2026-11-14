@@ -12,6 +12,7 @@
 
 #include "dumy/chunker.h"
 #include "dumy/common.h"
+#include "dumy/meta_commands.h"
 #include "dumy/prompts.h"
 
 namespace dumy {
@@ -810,13 +811,13 @@ AnswerResult RagPipeline::answer(const std::string& question,
             const std::string line =
                 nl == std::string::npos ? r.answer.substr(start)
                                         : r.answer.substr(start, nl - start);
-            const std::string f = az_fold(line);
-            const bool bad = f.find("qeyd:") != std::string::npos ||
-                             f.find("menbe:") != std::string::npos ||
-                             f.find("deyisiklik:") != std::string::npos ||
-                             f.find("esasinda verilib") != std::string::npos;
+            const std::string cut = cut_answer_marker(line);
+            const std::string f = az_fold(cut);
+            const bool bad = trim(cut).empty() ||
+                             f.find("esasinda verilib") != std::string::npos ||
+                             f.find("vacib qerarlar ucun menbeni yoxlayin") != std::string::npos;
             if (!bad) {
-                kept += line;
+                kept += cut;
                 kept += '\n';
             }
             if (nl == std::string::npos) break;
@@ -838,11 +839,51 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     const std::string q_original = trim(question);
     // Restore Azerbaijani letters for routing/retrieval only when the input is
     // pure ASCII; words are replaced only when they are in the local table.
-    const std::string q = normalize_az_input(q_original);
+    std::string q = normalize_az_input(q_original);
     if (q.empty()) {
         res.answer = "Sualınızı yazın - məmnuniyyətlə kömək edərəm.";
         if (on_delta) on_delta(res.answer);
         return res;
+    }
+
+    // --- Step 1: conversational meta commands (deterministic, no model) ----
+    // "cavab ver də sualıma" is a command about the previous question, never
+    // a topic: it is resolved here before routing and retrieval.
+    {
+        const MetaResult meta = classify_meta(q);
+        if (meta.kind != MetaKind::None) {
+            std::string target;
+            if (meta.has_content) {
+                target = meta.content;
+            } else {
+                const auto hist = sessions_.history(session_id);
+                for (auto it = hist.rbegin(); it != hist.rend(); ++it) {
+                    if (it->role != "user") continue;
+                    const std::string prev = trim(it->content);
+                    if (prev.empty() || is_smalltalk(prev)) continue;
+                    const MetaResult m2 = classify_meta(normalize_az_input(prev));
+                    if (m2.kind != MetaKind::None && !m2.has_content) continue;
+                    target = m2.has_content ? m2.content : prev;
+                    break;
+                }
+            }
+            if (trim(target).empty()) {
+                log_info("meta: command without a previous question");
+                res.qtype = "meta";
+                res.smalltalk = true;
+                res.no_sources = true;
+                res.answer = "Hansı suala cavab verim? Sualınızı yazın.";
+                if (on_delta) on_delta(res.answer);
+                return res;
+            }
+            q = normalize_az_input(target);
+            log_info(std::string("meta: ") + meta_kind_name(meta.kind) +
+                     " -> " + q);
+            if (meta.kind == MetaKind::Detail)
+                q += " (bu sualı ətraflı, bölmələrlə izah et)";
+            else if (meta.kind == MetaKind::Shorten)
+                q += " (yalnız bir-iki qısa cümlə ilə cavab ver)";
+        }
     }
 
     // --- 0a. Identity question about the bot: direct answer, no retrieval ---

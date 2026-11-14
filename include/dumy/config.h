@@ -55,6 +55,7 @@ struct Config {
 
     // --- Persistent memory (conversations + long-term facts) ---------------
     bool memory_enabled = true;             // conversations + "yaddaş" facts
+    bool debug_trace_enabled = false;       // local /debug/* routes (opt-in)
     int memory_max_facts = 50;              // hard cap on stored facts
     int memory_injection_tokens = 160;      // memory prompt budget (capped at 500)
     int conversation_retention_days = 0;    // 0 = keep conversations forever
