@@ -829,6 +829,68 @@ AnswerResult RagPipeline::answer(const std::string& question,
     return r;
 }
 
+namespace {
+// E3(a): faithful extractive fallback. Sentence-level stem overlap on folded
+// tokens (first 5 letters), plus a digit when the question asks for a number.
+std::vector<std::string> ex_stems(const std::string& s) {
+    const std::string f = az_fold(s);
+    std::vector<std::string> out;
+    std::string cur;
+    for (unsigned char ch : f) {
+        if (ch >= 'a' && ch <= 'z') {
+            cur += static_cast<char>(ch);
+        } else {
+            if (cur.size() >= 5) out.push_back(cur.substr(0, 5));
+            cur.clear();
+        }
+    }
+    if (cur.size() >= 5) out.push_back(cur.substr(0, 5));
+    return out;
+}
+
+bool extract_best_sentence(const std::string& question, const std::vector<Chunk>& chunks,
+                           std::string* out) {
+    const std::vector<std::string> qs = ex_stems(question);
+    if (qs.empty()) return false;
+    const std::string qf = az_fold(question);
+    const bool wants_number = qf.find("nece") != std::string::npos ||
+                              qf.find("ne qeder") != std::string::npos ||
+                              qf.find("hansi") != std::string::npos;
+    size_t best_score = 0;
+    std::string best;
+    for (const auto& c : chunks) {
+        size_t pos = 0;
+        while (pos < c.text.size()) {
+            size_t end = c.text.size();
+            for (size_t i = pos; i + 1 < c.text.size(); ++i) {
+                const char ch = c.text[i];
+                const char nx = c.text[i + 1];
+                if ((ch == '.' || ch == '!' || ch == '?') && (nx == ' ' || nx == '\n')) {
+                    end = i + 1;
+                    break;
+                }
+                if (ch == '\n') { end = i; break; }
+            }
+            std::string sent = trim(c.text.substr(pos, end - pos));
+            pos = end + 1;
+            if (sent.size() < 40) continue;
+            if (wants_number) {
+                bool digit = false;
+                for (char ch : sent) if (ch >= '0' && ch <= '9') { digit = true; break; }
+                if (!digit) continue;
+            }
+            size_t score = 0;
+            for (const auto& st : qs)
+                if (az_fold(sent).find(st) != std::string::npos) ++score;
+            if (score > best_score) { best_score = score; best = sent; }
+        }
+    }
+    if (best.empty() || best_score < 2) return false;
+    *out = best;
+    return true;
+}
+}  // namespace
+
 AnswerResult RagPipeline::answer_impl(const std::string& question,
                                       const std::string& session_id,
                                       const MemoryRef& mem,
@@ -1960,14 +2022,35 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
             log_info("quality gate: strict retry accepted (" +
                      std::to_string(final_answer.size()) + " chars)");
         } else if (degenerate || repetitive || off_domain) {
-            final_answer = HONEST_FAILURE_MESSAGE;
+            std::string ex;
+            if (extract_best_sentence(q, selected, &ex) && !is_degenerate_answer(ex) &&
+                !has_repetition_loop(ex)) {
+                final_answer = ex;
+                trace_attempts.push_back({{"attempt", 0}, {"purpose", "extractive_fallback"},
+                                          {"raw", utf8_prefix(ex, 400)},
+                                          {"chars", ex.size()}, {"verdict", "accepted"}});
+                log_info("quality gate: extractive fallback used (" +
+                         std::to_string(ex.size()) + " chars from a selected chunk)");
+            } else {
+                final_answer = HONEST_FAILURE_MESSAGE;
+            }
             log_warn("quality gate: strict retry failed - honest failure message");
         } else {
             log_warn("quality gate: strict retry not better - keeping short draft");
         }
     }
     if (trim(final_answer).empty()) {
-        final_answer = HONEST_FAILURE_MESSAGE;
+        std::string ex2;
+        if (extract_best_sentence(q, selected, &ex2) && !is_degenerate_answer(ex2) &&
+            !has_repetition_loop(ex2)) {
+            final_answer = ex2;
+            trace_attempts.push_back({{"attempt", 0}, {"purpose", "extractive_fallback"},
+                                      {"raw", utf8_prefix(ex2, 400)},
+                                      {"chars", ex2.size()}, {"verdict", "accepted"}});
+        } else {
+            final_answer = HONEST_FAILURE_MESSAGE;
+        }
+
         log_warn("quality gate: answer still empty - honest failure message");
     }
     if (requested_sentences > 0) {

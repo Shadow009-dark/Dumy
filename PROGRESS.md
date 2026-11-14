@@ -150,3 +150,9 @@ MSVC + vcpkg (curl, nlohmann-json, cpp-httplib, poppler).
 - DUMY_TEMP and DUMY_TOPK env overrides added so the variance experiment can change sampling without touching config.json.
 - tests/variance.py written: 6 questions x 5 runs x 4 configs (baseline, 0.1, 0, top3), writes test_results/variance.md after every run.
 - Seed is not exposed by ChatOptions, so the temp0 config runs without a fixed seed and the report says so.
+
+## 2026-11-14 — E2 result, E3(a)
+- Variance: baseline 67% answered, temp0.1 67%, temp0 60%, top3 73%; every refusal was a "repetition" reject, so sampling is not the lever.
+- E3(a): extractive fallback added before the honest failure — stem overlap (5 letters) on selected chunks, digit required for "neçə/nə qədər/hansı", validated with the existing degenerate/repetition checks.
+- Temperature kept at 0.25 (0.1 unchanged, 0 worse); top_k left at 6 for now because top3 traded refusals for a 27 s max.
+- Not done yet: E3(b)/(c) sampling/stall bounds, E4 test wiring.
