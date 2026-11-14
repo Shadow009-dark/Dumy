@@ -156,3 +156,9 @@ MSVC + vcpkg (curl, nlohmann-json, cpp-httplib, poppler).
 - E3(a): extractive fallback added before the honest failure — stem overlap (5 letters) on selected chunks, digit required for "neçə/nə qədər/hansı", validated with the existing degenerate/repetition checks.
 - Temperature kept at 0.25 (0.1 unchanged, 0 worse); top_k left at 6 for now because top3 traded refusals for a 27 s max.
 - Not done yet: E3(b)/(c) sampling/stall bounds, E4 test wiring.
+
+## 2026-11-14 — E3(a) measured
+- Before: 20/30 answered (67%), 10/30 refused, median 9.0 s, max 18.8 s.
+- After: 27/30 answered (90%), 3/30 refused, 7 extractive fallbacks, median 10.5 s, max 28.0 s.
+- All remaining refusals happen when no selected sentence passes the stem+digit match; the fallback never fabricates.
+- Still open: E3(b) sampling choice (temp is not the lever), E3(c) streaming abort and per-route num_predict, E4 test wiring.
