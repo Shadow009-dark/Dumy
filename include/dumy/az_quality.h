@@ -1122,6 +1122,10 @@ inline std::string cut_answer_marker(const std::string& line) {
         // "Mənbə: kitab.pdf, səh. 4" leaves a bare reference behind: every
         // remaining marker makes the whole line meta, so drop it entirely.
         if (answer_marker_pos(rest) != std::string::npos) return std::string();
+        // A bare file reference ("kitab.pdf, səh. 4") is meta even without a
+        // colon after the word "pdf".
+        for (const auto& t : answer_tokens(rest))
+            if (t.folded == "pdf") return std::string();
         if (rest.empty()) return rest;
         // A stranded list number ("1. Qeyd: ..." -> "1.") is noise.
         bool digits_only = true;

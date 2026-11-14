@@ -1,6 +1,7 @@
 ﻿# DUMY regression suite (PowerShell 5.1+, Windows)
 param([switch]$Quick)
 $env:DUMMY_DEBUG_TRACE = "1"
+if ($Quick) { & (Join-Path $PSScriptRoot "quick.ps1"); exit $LASTEXITCODE }
 #
 # Safety rules (ADD-2):
 #  - refuses to run if port 8085 is held by a process it did not start

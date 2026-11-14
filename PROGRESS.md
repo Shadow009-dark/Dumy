@@ -103,9 +103,17 @@ MSVC + vcpkg (curl, nlohmann-json, cpp-httplib, poppler).
 - No commit made (gate requires a green suite). A2 (quick mode), A3 (follow-ups), A4 (labels), A5 (latency) not started.
 
 - Follow-up: removed the over-broad "sual" prefix that deleted the fixed clarification sentence.
+<<<<<<< HEAD
 
 ## 2026-11-14 — B-batch (memory flag, debug gate)
 - mem_fact_inject root cause: the marker word "qeyd" matched the legitimate sentence "Yaddaşımda qeyd olunub: ..." and truncated it; markers now require a colon.
 - Probes: memory store/ask both memory_used=true, sources ["memory"], answer keeps "30"; q06 clean 5/5; /debug/sanitize 404 with the flag off, 200 with DUMMY_DEBUG_TRACE=1.
 - Suite still red: t16_pdf_diagnosis (answer ends mid-word, 5 pdf sources) and sanitize_markers (bare "Mənbə: file.pdf" leaves a .pdf token that the colon rule no longer flags).
 - All work committed to wip/step1 only; feature/memory-ui kept dirty with the same tree.
+=======
+>>>>>>> 18936eb (WIP: step1 meta commands + answer cleanup (suite 82/84))
+
+## 2026-11-14 — conflict cleanup + quick mode
+- A stray cherry-pick conflict left <<<<<<< markers in az_quality.h and http_server.cpp; resolved keeping the gated/new side, build is clean again.
+- Marker rule now requires a colon, plus a bare "pdf" reference drops the line; quick check: sanitize 15/15, step1_meta_first PASS.
+- tests/run_all.ps1 -Quick runs tests/quick.ps1 (server + 2 deterministic checks, under a minute); the full suite is still the commit gate.
