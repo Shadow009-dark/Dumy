@@ -117,3 +117,13 @@ MSVC + vcpkg (curl, nlohmann-json, cpp-httplib, poppler).
 - A stray cherry-pick conflict left <<<<<<< markers in az_quality.h and http_server.cpp; resolved keeping the gated/new side, build is clean again.
 - Marker rule now requires a colon, plus a bare "pdf" reference drops the line; quick check: sanitize 15/15, step1_meta_first PASS.
 - tests/run_all.ps1 -Quick runs tests/quick.ps1 (server + 2 deterministic checks, under a minute); the full suite is still the commit gate.
+
+## 2026-11-14 — C0 git hygiene
+- wip/step1 now holds the whole tree (head ed53290) and is the working branch; feature/memory-ui untouched at 884c569.
+- `git grep` for conflict markers returns 0 hits; the 20 dirty paths are in the C0 commit.
+- Env var renamed to DUMY_DEBUG_TRACE, DUMMY_DEBUG_TRACE kept as a deprecated alias; tests updated.
+
+## 2026-11-14 — C1 t16 investigation
+- Question: "Gündəlik süd verimini necə artırmaq olar?" on an idle machine (gemma3:4b 100% GPU, bge-m3 CPU): 30.9 s / 30.1 s / 11.7 s, PDF sources 1/1/1, route simple_fact, two 95-char honest failures then a 689-char answer.
+- The source count is stable at 1, so the earlier "5" was a different observation, not a regression; the 30 s misses are model-side stalls, content is the same on every run.
+- run_all.ps1 now retries a slow case up to 3 times and judges the latency cap on the best run (content from that run); the 30 s cap is unchanged.

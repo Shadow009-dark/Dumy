@@ -86,8 +86,11 @@ Config Config::load(const std::string& path, std::string* err) {
     read_if(j, "max_history_messages", c.max_history_messages);
     read_if(j, "memory_enabled", c.memory_enabled);
     read_if(j, "debug_trace_enabled", c.debug_trace_enabled);
-    // The regression suite opts in for its own server instance only.
-    if (const char* dbg = std::getenv("DUMMY_DEBUG_TRACE"); dbg && std::string(dbg) == "1")
+    // DUMY_DEBUG_TRACE enables the local /debug routes for the test server;
+    // DUMMY_DEBUG_TRACE is kept as a deprecated alias.
+    const char* dbg = std::getenv("DUMY_DEBUG_TRACE");
+    if (!dbg || std::string(dbg) != "1") dbg = std::getenv("DUMMY_DEBUG_TRACE");
+    if (dbg && std::string(dbg) == "1")
         c.debug_trace_enabled = true;
     read_if(j, "memory_max_facts", c.memory_max_facts);
     read_if(j, "memory_injection_tokens", c.memory_injection_tokens);

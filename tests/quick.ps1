@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $exe = Join-Path $root 'build\Release\dumy.exe'
 $base = 'http://127.0.0.1:8085'
-$env:DUMMY_DEBUG_TRACE = '1'
+$env:DUMY_DEBUG_TRACE = '1'
 
 $busy = Get-NetTCPConnection -LocalPort 8085 -State Listen -ErrorAction SilentlyContinue
 if ($busy) { Write-Host 'quick: port 8085 busy - stop the running server first'; exit 3 }
