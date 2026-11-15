@@ -3,10 +3,10 @@
   "entries": [
     {
       "id": "animal_unnatural_color",
-      "keywords": ["cuce", "toyuq", "orduk", "quzu", "inek", "at", "benovseyi", "cehrayi", "mavi", "yasil", "qirmizi", "narinci", "boya", "boyali"],
+      "keywords": ["cuce", "toyuq", "orduk", "quzu", "inek", "at", "benovseyi", "cehrayi", "mavi", "yasil", "qirmizi", "narinci", "boya", "boyay", "boyan", "boyal", "boyali"],
       "combos": [
         ["cuce", "toyuq", "orduk", "quzu", "inek", "at", "cep", "bala"],
-        ["benovseyi", "cehrayi", "mavi", "yasil", "qirmizi", "narinci", "boya", "boyal"]
+        ["benovseyi", "cehrayi", "mavi", "yasil", "qirmizi", "narinci", "boya", "boyay", "boyan", "boyal", "boyali"]
       ],
       "answer": "Təbii cücələr (və digər ev heyvanları) belə rəngdə olmur. Çox güman ki, onu süni boya ilə boyayıblar (bayram və ya satış üçün belə edilir). Boya və stress cücə üçün zərərli ola bilər.",
       "tags": ["heyvan", "rəng", "təhlükəsizlik"],
