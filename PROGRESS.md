@@ -162,3 +162,10 @@ MSVC + vcpkg (curl, nlohmann-json, cpp-httplib, poppler).
 - After: 27/30 answered (90%), 3/30 refused, 7 extractive fallbacks, median 10.5 s, max 28.0 s.
 - All remaining refusals happen when no selected sentence passes the stem+digit match; the fallback never fabricates.
 - Still open: E3(b) sampling choice (temp is not the lever), E3(c) streaming abort and per-route num_predict, E4 test wiring.
+
+## 2026-11-14 — F1/F2 Tier 2
+- knowledge/common_sense.json with 25 curated entries; knowledge_base.h matches folded 5-letter stems plus AND-combos, hot-reloaded by mtime.
+- Tier 2 answers before any model call with source.type=knowledge; docs/ADD_KNOWLEDGE.md documents the format with two examples.
+- Config flags knowledge_enabled and general_fallback_enabled added (both default true).
+- Tier 4 text replaces the two bare refusals in the quality gate; Tier 3 model fallback not implemented.
+- Chick phrasings answer with the boya text from the file; verified live below.

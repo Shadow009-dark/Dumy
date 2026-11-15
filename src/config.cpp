@@ -85,6 +85,8 @@ Config Config::load(const std::string& path, std::string* err) {
     read_if(j, "request_timeout", c.request_timeout);
     read_if(j, "max_history_messages", c.max_history_messages);
     read_if(j, "memory_enabled", c.memory_enabled);
+    read_if(j, "knowledge_enabled", c.knowledge_enabled);
+    read_if(j, "general_fallback_enabled", c.general_fallback_enabled);
     read_if(j, "debug_trace_enabled", c.debug_trace_enabled);
     // DUMY_DEBUG_TRACE enables the local /debug routes for the test server;
     // DUMMY_DEBUG_TRACE is kept as a deprecated alias.

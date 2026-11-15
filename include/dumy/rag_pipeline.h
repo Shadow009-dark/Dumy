@@ -18,6 +18,7 @@
 #include "dumy/reranker.h"
 #include "dumy/retriever.h"
 #include "dumy/session_manager.h"
+#include "dumy/knowledge_base.h"
 #include "dumy/vector_store.h"
 #include "dumy/web_search.h"
 
@@ -39,6 +40,7 @@ struct WarmupInfo {
 struct AnswerResult {
     std::string answer;                 // final text (labels + footer included)
     std::vector<Chunk> used_chunks;     // chunks that made it into the context
+    std::vector<std::string> knowledge_ids;  // Tier 2 entries used
     std::string qtype;                  // question_type_name()
     bool refused = false;               // polite code refusal was returned
     bool used_web = false;
@@ -149,6 +151,7 @@ private:
 
     bool ollama_ok_ = false;
     std::string chat_model_;       // "models.draft" - main answer model
+    mutable KnowledgeBase knowledge_;   // Tier 2 curated knowledge (hot-reloaded)
     std::string helper_model_;     // "models.helper" - expand/rerank/summarize
     std::string selfcheck_model_;  // "models.selfcheck" - fact-check pass
     std::string embedding_model_;

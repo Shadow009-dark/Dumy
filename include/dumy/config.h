@@ -55,6 +55,8 @@ struct Config {
 
     // --- Persistent memory (conversations + long-term facts) ---------------
     bool memory_enabled = true;             // conversations + "yaddaş" facts
+    bool knowledge_enabled = true;          // Tier 2 curated knowledge file
+    bool general_fallback_enabled = true;   // Tier 3 safe general answer
     bool debug_trace_enabled = false;       // local /debug/* routes (opt-in)
     int memory_max_facts = 50;              // hard cap on stored facts
     int memory_injection_tokens = 160;      // memory prompt budget (capped at 500)

@@ -1,0 +1,209 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "animal_unnatural_color",
+      "keywords": ["cuce", "toyuq", "orduk", "quzu", "inek", "at", "benovseyi", "cehrayi", "mavi", "yasil", "qirmizi", "narinci", "boya", "boyali"],
+      "combos": [
+        ["cuce", "toyuq", "orduk", "quzu", "inek", "at", "cep", "bala"],
+        ["benovseyi", "cehrayi", "mavi", "yasil", "qirmizi", "narinci", "boya", "boyal"]
+      ],
+      "answer": "Təbii cücələr (və digər ev heyvanları) belə rəngdə olmur. Çox güman ki, onu süni boya ilə boyayıblar (bayram və ya satış üçün belə edilir). Boya və stress cücə üçün zərərli ola bilər.",
+      "tags": ["heyvan", "rəng", "təhlükəsizlik"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "egg_incubation",
+      "keywords": ["inkubasiya", "kurtum", "yumurta", "cuce", "toyuq"],
+      "answer": "Toyuq yumurtasının inkubasiya müddəti adətən 21 gün (təxminən 3 həftə) olur. Temperatur və rütubət düzgün saxlanmalıdır.",
+      "tags": ["toyuq", "yumurta"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "rooster_crowing",
+      "keywords": ["xoruz", "banla", "ses", "seher"],
+      "answer": "Xoruzlar adətən sübh çağı banlayır; bu, işığın artmasına bağlı bioloji ritmdir. Banlama həm də ərazini bildirmək və diqqət çəkmək üçündür.",
+      "tags": ["toyuq", "davranış"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "rumination",
+      "keywords": ["govseme", "govse", "mide", "malqara", "inek", "qoyun"],
+      "answer": "Mal-qara və qoyunlar gövşəyən heyvanlardır: yem əvvəlcə işgəncəyə yığılır, sonra sakit halda yenidən çeynənir. Bu, lifli yemin həzm olunması üçün təbii prosesdir.",
+      "tags": ["mal-qara", "həzm"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "sheep_flocking",
+      "keywords": ["qoyun", "suru", "hereket", "davranis"],
+      "answer": "Qoyunlar sürü heyvanlarıdır və təhlükə hiss etdikdə bir-birinə sıxışaraq sürü halında hərəkət edir. Bu, yırtıcılardan qorunma instinktidir.",
+      "tags": ["qoyun", "davranış"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "bee_waggle",
+      "keywords": ["ari", "reqs", "bal", "petek"],
+      "answer": "Arılar yem mənbəyinin yerini \"rəqs\" (səkkiz rəqsi) ilə bildirir; rəqsin istiqaməti və müddəti mənbəyə qədər məsafəni göstərir.",
+      "tags": ["arı", "davranış"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "cow_chewing_cud",
+      "keywords": ["inek", "govseme", "yem", "ceyneme"],
+      "answer": "İnək gündə təxminən 6-8 saat gövşəyir. Gövşəmə dayanarsa, bu, həzm pozulmasının ilk əlamətlərindən biri ola bilər.",
+      "tags": ["inek", "həzm"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "cat_purring",
+      "keywords": ["pisik", "miyov", "purr", "ses"],
+      "answer": "Pişiklər mırıldanmanı rahatlıq və ya özünütəsəlli üçün çıxarır; bu, təkcə sevinclə bağlı deyil.",
+      "tags": ["ev heyvanı", "davranış"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "dog_tail_wagging",
+      "keywords": ["it", "quyruq", "terpet", "davranis"],
+      "answer": "İtin quyruq tərpətməsi həmişə sevinc demək deyil; sağa doğru tərpətmə müsbət, sola doğru tərpətmə narahatlıqla əlaqələndirilir.",
+      "tags": ["it", "davranış"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "duck_waterproof",
+      "keywords": ["orduk", "su", "lekeli", "per", "mum"],
+      "answer": "Ördəklərin lələkləri suya davamlıdır, çünki onlar xüsusi yağ vəsi ilə örtülür. Bu, üzmə zamanı bədənin islanmasının qarşısını alır.",
+      "tags": ["ördək", "biologiya"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "goat_pupil",
+      "keywords": ["keci", "goz", "bəbək", "gorus"],
+      "answer": "Keçilərin bəbəyi üfüqi formadadır; bu, onlara geniş bucaq altında ətrafı görməyə kömək edir.",
+      "tags": ["keçi", "biologiya"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "honey_never_spoils",
+      "keywords": ["bal", "xarab", "saxlama", "muddet"],
+      "answer": "Düzgün saxlanan təbii bal uzun müddət xarab olmur; bunun səbəbi az su miqdarı və təbii turşuluğudur.",
+      "tags": ["bal", "qida"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "milk_color_yellow",
+      "keywords": ["sud", "sari", "reng", "karotin"],
+      "answer": "İnək südünün sarımtıl çaları karotin pigmentindən irəli gəlir; bu, yemlə (xüsusən yaşıl otla) bağlıdır.",
+      "tags": ["süd", "keyfiyyət"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "sheep_tail_fat",
+      "keywords": ["qoyun", "quyruq", "piy", "cins"],
+      "answer": "Bəzi qoyun cinslərində quyruqda yağ yığılır; bu, enerji ehtiyatı saxlayan adaptasiyadır.",
+      "tags": ["qoyun", "cins"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "cattle_sleep",
+      "keywords": ["inek", "yatma", "yuxu", "istirahet"],
+      "answer": "İnəklər gündə təxminən 10-12 saat uzanır, lakin dərin yuxu qısa olur. Rahat yatma yeri süd veriminə müsbət təsir edir.",
+      "tags": ["inek", "davranış"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "chicken_dust_bath",
+      "keywords": ["toyuq", "toz", "vanna", "temizlik"],
+      "answer": "Toyuqlar toz vannası qəbul edir; bu, lələklərdəki parazitləri və artıq yağı təmizləməyə kömək edir.",
+      "tags": ["toyuq", "davranış"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "calf_colostrum",
+      "keywords": ["buzov", "agiz", "sud", "colostrum"],
+      "answer": "Yeni doğulmuş buzovun ilk saatlarda ana südü (colostrum) alması vacibdir; bu süd immun maddələrlə zəngindir.",
+      "tags": ["buzov", "sağlamlıq"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "horses_sleep_standing",
+      "keywords": ["at", "yuxu", "ayaq", "yatma"],
+      "answer": "Atlar dayanaraq yuxuya gedə bilir, lakin dərin yuxu üçün uzanırlar. Ayaqda yuxu onları təhlükəyə hazır saxlayır.",
+      "tags": ["at", "davranış"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "sheep_wool_growth",
+      "keywords": ["qoyun", "yun", "bitme", "qirxma"],
+      "answer": "Qoyun yunu il davamında davamlı bitir; adətən ildə bir dəfə, yazda qırxılır. Qırxma vaxtı hava şəraiti nəzərə alınmalıdır.",
+      "tags": ["qoyun", "yun"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "bee_queen",
+      "keywords": ["ari", "ana", "kralice", "peteк"],
+      "answer": "Arı ailəsində yumurta qoyan tək ana arıdır; işçi arılar onun feromonları ilə ailəni birləşdirir.",
+      "tags": ["arı", "biologiya"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "cow_rumen_gas",
+      "keywords": ["inek", "qarin", "sis", "qaz", "timpaniya"],
+      "answer": "İnəklərdə qarın şişkinliyi adətən işgəncədə qaz yığılması ilə əlaqədardır. Bu, təcili baytar müdaxiləsi tələb edə bilən vəziyyətdir.",
+      "tags": ["inek", "sağlamlıq"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "milk_yield_factors",
+      "keywords": ["sud", "verim", "artirma", "yem", "sagim"],
+      "answer": "Süd veriminə yem rasionu, suya çıxış, sağım rejimi, stress və inəyin sağlamlığı birlikdə təsir edir. Dəyişiklikləri birdən deyil, tədricən etmək tövsiyə olunur.",
+      "tags": ["süd", "məhsuldarlıq"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "egg_shell_color",
+      "keywords": ["yumurta", "qabiq", "reng", "toyuq"],
+      "answer": "Yumurta qabığının rəngi toyuğun cinsindən asılıdır, keyfiyyətindən deyil; qəhvəyi və ağ yumurta qidalılıq baxımından fərqlənmir.",
+      "tags": ["toyuq", "yumurta"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "goat_climbing",
+      "keywords": ["keci", "dırmaş", "qaya", "balans"],
+      "answer": "Keçilər yaxşı dırmaşan heyvanlardır; bu, onların təbiətdə qida tapmaq və yırtıcıdan qorunma davranışıdır.",
+      "tags": ["keçi", "davranış"],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "chicken_memory_faces",
+      "keywords": ["toyuq", "yad", "tanima", "yaddas"],
+      "answer": "Toyuqlar 100-dən çox üzü tanıya bilir və sürüdə sosial iyerarxiya saxlayır; bu, onların davranışını izah edir.",
+      "tags": ["toyuq", "davranış"],
+      "safe": true,
+      "confidence": "high"
+    }
+  ]
+}

@@ -346,6 +346,11 @@ nlohmann::json AnswerResult::sources_json() const {
     // page, snippet}. The answer TEXT never carries source labels.
     nlohmann::json arr = nlohmann::json::array();
     std::vector<std::string> seen;
+    for (const auto& kid : knowledge_ids)
+        arr.push_back({{"type", "knowledge"}, {"id", kid}, {"file", ""},
+                       {"page", 0}, {"snippet", ""}, {"source", ""},
+                       {"url", ""}, {"trusted", true}});
+    if (!arr.empty()) return arr;
     auto basename = [](const std::string& path) {
         const size_t slash = path.find_last_of("/\\");
         return slash == std::string::npos ? path : path.substr(slash + 1);
@@ -398,6 +403,7 @@ RagPipeline::RagPipeline(const Config& cfg, OllamaClient& ollama, VectorStorePtr
       retriever_(retriever),
       reranker_(reranker),
       sessions_(sessions) {
+    knowledge_.load("knowledge/common_sense.json");
     embedding_model_ = cfg_.embedding_model;
 }
 
@@ -889,6 +895,12 @@ bool extract_best_sentence(const std::string& question, const std::vector<Chunk>
     *out = best;
     return true;
 }
+// Tier 4: never the bare refusal.
+std::string helpful_uncertainty(const std::string& q) {
+    (void)q;
+    return "Bu mövzuda dəqiq məlumat tapa bilmədim, amma kömək edə bilərəm: "
+           "hansı heyvan və ya hansı mərhələ sizi maraqlandırır?";
+}
 }  // namespace
 
 AnswerResult RagPipeline::answer_impl(const std::string& question,
@@ -1242,6 +1254,18 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     StageTimer t_route;
     const QuestionType qtype = retriever_.analyze(q);
     res.qtype = question_type_name(qtype);
+
+    // --- 1b. Tier 2: curated knowledge, deterministic and model-free --------
+    if (cfg_.knowledge_enabled) {
+        if (const KnowledgeEntry* ke = knowledge_.match(q)) {
+            res.answer = ke->answer;
+            res.qtype = "knowledge";
+            res.knowledge_ids.push_back(ke->id);
+            if (on_delta) on_delta(ke->answer);
+            log_info("knowledge: matched entry " + ke->id);
+            return res;
+        }
+    }
 
     // --- 2a. Off-domain questions: no PDF, honest short answer --------------
     // The indexed books are agriculture/veterinary. For anything else the 4B
@@ -2032,7 +2056,7 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
                 log_info("quality gate: extractive fallback used (" +
                          std::to_string(ex.size()) + " chars from a selected chunk)");
             } else {
-                final_answer = HONEST_FAILURE_MESSAGE;
+                final_answer = helpful_uncertainty(q);
             }
             log_warn("quality gate: strict retry failed - honest failure message");
         } else {
@@ -2048,7 +2072,7 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
                                       {"raw", utf8_prefix(ex2, 400)},
                                       {"chars", ex2.size()}, {"verdict", "accepted"}});
         } else {
-            final_answer = HONEST_FAILURE_MESSAGE;
+            final_answer = helpful_uncertainty(q);
         }
 
         log_warn("quality gate: answer still empty - honest failure message");
