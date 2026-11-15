@@ -113,10 +113,11 @@ public:
                 score += 10;   // an explicit combo outranks a single keyword
             }
             if (!ok) continue;
-            bool kw = false;
+            std::size_t kw = 0;
             for (const auto& k : e.keywords)
-                if (has_stem(stems, k)) { kw = true; ++score; }
-            if (e.combos.empty() && !kw) continue;
+                if (has_stem5(stems, k)) ++kw;
+            if (e.combos.empty() && kw < 2) continue;   // F6.3: no single-word matches
+            score += kw;
             if (score > best_score) { best_score = score; best = &e; }
         }
         return best;
@@ -172,6 +173,16 @@ private:
         }
         if (cur.size() >= 4) out.push_back(cur.substr(0, 5));
         return out;
+    }
+
+    // Strict stem: both sides must be at least five letters (F6.3).
+    static bool has_stem5(const std::vector<std::string>& stems, const std::string& word) {
+        const std::vector<std::string> w = tokenize(word);
+        if (w.empty() || w.front().size() < 5) return false;
+        const std::string want = w.front().substr(0, 5);
+        for (const auto& st : stems)
+            if (st.size() >= 5 && st.compare(0, 5, want) == 0) return true;
+        return false;
     }
 
     static bool has_stem(const std::vector<std::string>& stems, const std::string& word) {

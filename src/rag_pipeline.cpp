@@ -897,7 +897,18 @@ bool extract_best_sentence(const std::string& question, const std::vector<Chunk>
 }
 // Tier 4: never the bare refusal.
 std::string helpful_uncertainty(const std::string& q) {
-    (void)q;
+    static const char* entity_words[] = {
+        "cuce", "toyuq", "xoruz", "orduk", "quzu", "qoyun", "keci",
+        "inek", "dana", "buzov", "at", "ari", "bugda", "arpa", "qargidali",
+        "pambiq", "uzum", "tomat", "kartof", "yem"};
+    const std::string f = az_fold(q);
+    std::string entity;
+    for (const char* w : entity_words) {
+        if (f.find(w) != std::string::npos) { entity = w; break; }
+    }
+    if (!entity.empty())
+        return entity + " barədə nəyi öyrənmək istəyirsiniz: qidalanma, xəstəlik, "
+                        "yoxsa baxım?";
     return "Bu mövzuda dəqiq məlumat tapa bilmədim, amma kömək edə bilərəm: "
            "hansı heyvan və ya hansı mərhələ sizi maraqlandırır?";
 }
