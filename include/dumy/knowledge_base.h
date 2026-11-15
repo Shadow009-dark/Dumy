@@ -87,7 +87,7 @@ public:
                 for (const auto& g : group)
                     if (has_stem(stems, g)) { hit = true; break; }
                 if (!hit) { ok = false; break; }
-                ++score;
+                score += 10;   // an explicit combo outranks a single keyword
             }
             if (!ok) continue;
             bool kw = false;
@@ -154,7 +154,14 @@ private:
     static bool has_stem(const std::vector<std::string>& stems, const std::string& word) {
         const std::vector<std::string> w = tokenize(word);
         if (w.empty()) return false;
-        return std::find(stems.begin(), stems.end(), w.front()) != stems.end();
+        // Suffixes change the tail (cuceni vs cuce), so compare the first four
+        // letters of both sides instead of requiring an exact 5-letter stem.
+        const std::string want = w.front().substr(0, 4);
+        for (const auto& st : stems) {
+            if (st.size() < 4) continue;
+            if (st.compare(0, 4, want) == 0) return true;
+        }
+        return false;
     }
 
     std::string path_;
