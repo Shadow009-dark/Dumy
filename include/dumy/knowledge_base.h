@@ -72,6 +72,29 @@ public:
         if (!loaded_ || t != loaded_at_) load(path_);
     }
 
+    // Only entries that declare combos are specific enough to pre-empt the PDF
+    // tier; keyword-only entries wait until retrieval has had its chance.
+    const KnowledgeEntry* match_combo(const std::string& question) {
+        refresh();
+        const std::vector<std::string> stems = tokenize(question);
+        const KnowledgeEntry* best = nullptr;
+        std::size_t best_score = 0;
+        for (const auto& e : entries_) {
+            if (!e.safe || e.combos.empty()) continue;
+            std::size_t score = 0;
+            bool ok = true;
+            for (const auto& group : e.combos) {
+                bool hit = false;
+                for (const auto& g : group)
+                    if (has_stem(stems, g)) { hit = true; break; }
+                if (!hit) { ok = false; break; }
+                score += 10;
+            }
+            if (ok && score > best_score) { best_score = score; best = &e; }
+        }
+        return best;
+    }
+
     const KnowledgeEntry* match(const std::string& question) {
         refresh();
         if (entries_.empty()) return nullptr;

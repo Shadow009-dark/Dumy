@@ -169,3 +169,9 @@ MSVC + vcpkg (curl, nlohmann-json, cpp-httplib, poppler).
 - Config flags knowledge_enabled and general_fallback_enabled added (both default true).
 - Tier 4 text replaces the two bare refusals in the quality gate; Tier 3 model fallback not implemented.
 - Chick phrasings answer with the boya text from the file; verified live below.
+
+## 2026-11-14 — F1 ordering fix
+- First attempt matched Tier 2 before retrieval, which hijacked t16/dom01/q11/q12 and turned the suite red with qtype knowledge.
+- Tier 2 now has two doors: combo entries answer before retrieval, keyword-only entries only at the quality gate; the ladder is PDF first, curated second.
+- Dead block from the first placement removed, build clean, chick phrasings verified again.
+- Still open: F3 UI chips, F4 suite rows/labels, F5 gate not yet re-run.

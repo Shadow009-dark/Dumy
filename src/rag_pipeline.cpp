@@ -1255,23 +1255,23 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     const QuestionType qtype = retriever_.analyze(q);
     res.qtype = question_type_name(qtype);
 
-    // --- 1b. Tier 2: curated knowledge, deterministic and model-free --------
-    if (cfg_.knowledge_enabled) {
-        if (const KnowledgeEntry* ke = knowledge_.match(q)) {
-            res.answer = ke->answer;
-            res.qtype = "knowledge";
-            res.knowledge_ids.push_back(ke->id);
-            if (on_delta) on_delta(ke->answer);
-            log_info("knowledge: matched entry " + ke->id);
-            return res;
-        }
-    }
 
     // --- 2a. Off-domain questions: no PDF, honest short answer --------------
     // The indexed books are agriculture/veterinary. For anything else the 4B
     // model is unreliable, so procedures/grammar/lists get a deterministic
     // refusal and simple facts/definitions get one short answer that must pass
     // the word-validity, subject and domain-drift checks.
+    // Tier 2 combo entries are specific enough to answer before retrieval.
+    if (cfg_.knowledge_enabled) {
+        if (const KnowledgeEntry* ke = knowledge_.match_combo(q)) {
+            res.answer = ke->answer;
+            res.qtype = "knowledge";
+            res.knowledge_ids.push_back(ke->id);
+            if (on_delta) on_delta(ke->answer);
+            log_info("knowledge: combo entry " + ke->id);
+            return res;
+        }
+    }
     if (!has_agri_keyword(q)) {
         res.qtype = "general";
         res.no_sources = true;
@@ -2046,8 +2046,19 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
             log_info("quality gate: strict retry accepted (" +
                      std::to_string(final_answer.size()) + " chars)");
         } else if (degenerate || repetitive || off_domain) {
+            const KnowledgeEntry* ke =
+                cfg_.knowledge_enabled ? knowledge_.match(q) : nullptr;
+            if (ke) {
+                final_answer = ke->answer;
+                res.qtype = "knowledge";
+                res.knowledge_ids.push_back(ke->id);
+                trace_attempts.push_back({{"attempt", 0}, {"purpose", "knowledge"},
+                                          {"chars", ke->answer.size()},
+                                          {"verdict", "accepted"}});
+                log_info("knowledge: matched entry " + ke->id + " at the quality gate");
+            }
             std::string ex;
-            if (extract_best_sentence(q, selected, &ex) && !is_degenerate_answer(ex) &&
+            if (!ke && extract_best_sentence(q, selected, &ex) && !is_degenerate_answer(ex) &&
                 !has_repetition_loop(ex)) {
                 final_answer = ex;
                 trace_attempts.push_back({{"attempt", 0}, {"purpose", "extractive_fallback"},
