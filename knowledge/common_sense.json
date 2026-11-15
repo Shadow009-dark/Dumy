@@ -167,7 +167,8 @@
         "qoyun",
         "suru",
         "hereket",
-        "davranis"
+        "davranis",
+        "hereke"
       ],
       "answer": "Qoyunlar sürü heyvanlarıdır və təhlükə hiss etdikdə bir-birinə sıxışaraq sürü halında hərəkət edir. Bu, yırtıcılardan qorunma instinktidir.",
       "tags": [
@@ -183,7 +184,8 @@
         "ari",
         "reqs",
         "bal",
-        "petek"
+        "petek",
+        "danis"
       ],
       "answer": "Arılar yem mənbəyinin yerini \"rəqs\" (səkkiz rəqsi) ilə bildirir; rəqsin istiqaməti və müddəti mənbəyə qədər məsafəni göstərir.",
       "tags": [
@@ -199,7 +201,9 @@
         "inek",
         "govseme",
         "yem",
-        "ceyneme"
+        "ceyneme",
+        "govse",
+        "ceyne"
       ],
       "answer": "İnək gündə təxminən 6-8 saat gövşəyir. Gövşəmə dayanarsa, bu, həzm pozulmasının ilk əlamətlərindən biri ola bilər.",
       "tags": [
@@ -215,7 +219,9 @@
         "pisik",
         "miyov",
         "purr",
-        "ses"
+        "ses",
+        "xirild",
+        "xiril"
       ],
       "answer": "Pişiklər mırıldanmanı rahatlıq və ya özünütəsəlli üçün çıxarır; bu, təkcə sevinclə bağlı deyil.",
       "tags": [
@@ -231,7 +237,9 @@
         "it",
         "quyruq",
         "terpet",
-        "davranis"
+        "davranis",
+        "bulay",
+        "terped"
       ],
       "answer": "İtin quyruq tərpətməsi həmişə sevinc demək deyil; sağa doğru tərpətmə müsbət, sola doğru tərpətmə narahatlıqla əlaqələndirilir.",
       "tags": [
@@ -248,7 +256,9 @@
         "su",
         "lekeli",
         "per",
-        "mum"
+        "mum",
+        "islan",
+        "suda"
       ],
       "answer": "Ördəklərin lələkləri suya davamlıdır, çünki onlar xüsusi yağ vəsi ilə örtülür. Bu, üzmə zamanı bədənin islanmasının qarşısını alır.",
       "tags": [
@@ -264,7 +274,10 @@
         "keci",
         "goz",
         "bəbək",
-        "gorus"
+        "gorus",
+        "bebek",
+        "ufuqi",
+        "gozu"
       ],
       "answer": "Keçilərin bəbəyi üfüqi formadadır; bu, onlara geniş bucaq altında ətrafı görməyə kömək edir.",
       "tags": [
@@ -280,7 +293,8 @@
         "bal",
         "xarab",
         "saxlama",
-        "muddet"
+        "muddet",
+        "saxlan"
       ],
       "answer": "Düzgün saxlanan təbii bal uzun müddət xarab olmur; bunun səbəbi az su miqdarı və təbii turşuluğudur.",
       "tags": [

@@ -1284,6 +1284,17 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
         }
     }
     if (!has_agri_keyword(q)) {
+        // F7.1(b): outside the books - curated knowledge before any model call.
+        if (cfg_.knowledge_enabled) {
+            if (const KnowledgeEntry* ke = knowledge_.match(q)) {
+                res.answer = ke->answer;
+                res.qtype = "knowledge";
+                res.knowledge_ids.push_back(ke->id);
+                if (on_delta) on_delta(ke->answer);
+                log_info("knowledge_pre (off-domain): " + ke->id);
+                return res;
+            }
+        }
         res.qtype = "general";
         res.no_sources = true;
         res.from_own_knowledge = true;
@@ -1639,6 +1650,20 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
         }
     }
     const double ms_rerank = t_rerank.ms();
+
+    // --- 4b. Tier 2 before generation, only when no chunk passed the gate ---
+    std::string arb_branch = "pdf";
+    if (cfg_.knowledge_enabled && (selected.empty() || pdf_relevance_failed)) {
+        if (const KnowledgeEntry* ke = knowledge_.match(q)) {
+            res.answer = ke->answer;
+            res.qtype = "knowledge";
+            res.knowledge_ids.push_back(ke->id);
+            if (on_delta) on_delta(ke->answer);
+            arb_branch = "knowledge_pre";
+            log_info("knowledge_pre: " + ke->id);
+            return res;
+        }
+    }
     if (!rk_err.empty()) log_warn("rerank: " + rk_err);
 
     // Test instrument (DUMY_DUMP_TOPK=1): log the exact post-rerank context
@@ -2066,8 +2091,16 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
                                           {"chars", ex.size()}, {"verdict", "accepted"}});
                 log_info("quality gate: extractive fallback used (" +
                          std::to_string(ex.size()) + " chars from a selected chunk)");
+            } else if (cfg_.knowledge_enabled && knowledge_.match(q)) {
+                const KnowledgeEntry* ke = knowledge_.match(q);
+                final_answer = ke->answer;
+                res.knowledge_ids.push_back(ke->id);
+                res.qtype = "knowledge";
+                arb_branch = "knowledge_post";
+                log_info("knowledge_post: " + ke->id);
             } else {
                 final_answer = helpful_uncertainty(q);
+                arb_branch = "tier4";
             }
             log_warn("quality gate: strict retry failed - honest failure message");
         } else {
@@ -2157,6 +2190,7 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
         t["query"] = q;
         t["rewritten"] = q_retrieval;
         t["meta_class"] = trace_meta;
+        t["arbitration"] = arb_branch;
         t["attempts"] = trace_attempts;
         t["expansion"] = {{"skipped", skip_expansion}, {"queries", qs}};
         t["retrieval"] = {{"top_k", top_k},
