@@ -2046,19 +2046,8 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
             log_info("quality gate: strict retry accepted (" +
                      std::to_string(final_answer.size()) + " chars)");
         } else if (degenerate || repetitive || off_domain) {
-            const KnowledgeEntry* ke =
-                cfg_.knowledge_enabled ? knowledge_.match(q) : nullptr;
-            if (ke) {
-                final_answer = ke->answer;
-                res.qtype = "knowledge";
-                res.knowledge_ids.push_back(ke->id);
-                trace_attempts.push_back({{"attempt", 0}, {"purpose", "knowledge"},
-                                          {"chars", ke->answer.size()},
-                                          {"verdict", "accepted"}});
-                log_info("knowledge: matched entry " + ke->id + " at the quality gate");
-            }
             std::string ex;
-            if (!ke && extract_best_sentence(q, selected, &ex) && !is_degenerate_answer(ex) &&
+            if (extract_best_sentence(q, selected, &ex) && !is_degenerate_answer(ex) &&
                 !has_repetition_loop(ex)) {
                 final_answer = ex;
                 trace_attempts.push_back({{"attempt", 0}, {"purpose", "extractive_fallback"},
