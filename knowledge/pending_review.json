@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "disabled": true,
+  "entries": [
+    {
+      "id": "calf_colostrum",
+      "keywords": [
+        "buzov",
+        "agiz",
+        "sud",
+        "colostrum"
+      ],
+      "answer": "Yeni doğulmuş buzovun ilk saatlarda ana südü (colostrum) alması vacibdir; bu süd immun maddələrlə zəngindir.",
+      "tags": [
+        "buzov",
+        "sağlamlıq"
+      ],
+      "safe": true,
+      "confidence": "high"
+    },
+    {
+      "id": "milk_yield_factors",
+      "keywords": [
+        "sud",
+        "verim",
+        "artirma",
+        "yem",
+        "sagim"
+      ],
+      "answer": "Süd veriminə yem rasionu, suya çıxış, sağım rejimi, stress və inəyin sağlamlığı birlikdə təsir edir. Dəyişiklikləri birdən deyil, tədricən etmək tövsiyə olunur.",
+      "tags": [
+        "süd",
+        "məhsuldarlıq"
+      ],
+      "safe": true,
+      "confidence": "high"
+    }
+  ]
+}

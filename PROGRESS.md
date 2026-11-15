@@ -175,3 +175,10 @@ MSVC + vcpkg (curl, nlohmann-json, cpp-httplib, poppler).
 - Tier 2 now has two doors: combo entries answer before retrieval, keyword-only entries only at the quality gate; the ladder is PDF first, curated second.
 - Dead block from the first placement removed, build clean, chick phrasings verified again.
 - Still open: F3 UI chips, F4 suite rows/labels, F5 gate not yet re-run.
+
+## 2026-11-14 — F6.1/F6.2/F6.4
+- Colour combos restricted to bənövşəyi, çəhrayı, yaşıl, narıncı (+boya/boyay/boyal); sarı/qırmızı/qara/ağ/qonur removed, mavi moved to its own hedged entry.
+- Chick action entry added with the triage text; matching is combo-based so it needs both the animal and the action phrase.
+- Six negative phrasings do not return the dye answer; five positives and three action phrasings answer from knowledge in under 0.1 s.
+- knowledge/REVIEW.md generated from the file; calf_colostrum and milk_yield_factors parked into pending_review.json as advice that overlaps the PDFs.
+- Suite on 8a869f9: 84/84. F6.3 keyword arbitration, F6.5 chips and F6.7 suite rows are still open.
