@@ -148,6 +148,26 @@ int main() {
                   .empty(),
           "no chunks -> no excerpt bullets");
 
+    // 14) STEP 5: one shared agriculture list covers the livestock words the
+    //     retriever's private copy missed.
+    check(has_agri_keyword("Dana ishalı olduqda nə etmək lazımdır?") &&
+              has_agri_keyword("Buzov hansı yemlə bəslənir?") &&
+              has_agri_keyword("Toyuq yumurtası necə saxlanmalıdır?") &&
+              has_agri_keyword("Keçi südü") && has_agri_keyword("Arı ailəsi qışa hazırlanır") &&
+              has_agri_keyword("Quzu əti") && has_agri_keyword("At bəslənilməsi") &&
+              has_agri_keyword("Camış südü") && has_agri_keyword("Qaramal naxırları") &&
+              has_agri_keyword("Mal-qara bəslənilməsi") && has_agri_keyword("Ördək bəsləmək") &&
+              has_agri_keyword("Hinduşka yemi") &&
+              has_agri_keyword("Arılarda varroa xəstəliyi ilə necə mübarizə aparılır?") &&
+              has_agri_keyword("Quşlar hansı yemlə bəslənir?") &&
+              has_agri_keyword("Atlar üçün yem"),
+          "shared agri list covers the livestock vocabulary");
+
+    // 15) ...and still keeps everyday questions out of the PDF path.
+    check(!has_agri_keyword("Telefon necə işləyir?") &&
+              !has_agri_keyword("2026-cı ildə dünya çempionu kim oldu?"),
+          "shared agri list ignores general questions");
+
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
 }

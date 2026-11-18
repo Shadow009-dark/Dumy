@@ -329,9 +329,14 @@ inline bool has_agri_keyword(const std::string& text) {
         "yonca", "kartof", "pomidor", "xiyar", "badimcan", "lahanay",
         "pambiq", "uzum", "bag", "meyve", "terevez", "agac", "ting", "toxum",
         "torpaq", "gubre", "suvarma", "ekin", "beceri", "seleksiya", "sort",
+        // Short stems (3 letters) match the whole token only, so the plural
+        // forms a real question uses are listed too: arılar, quşlar, atlar.
+        "at", "atlar", "qus", "qusl", "aril", "coban", "traktor",
         "mehsul", "fermer", "ferma", "baytar", "veterinariya", "agronom",
         "agronomiya", "diaqnoz", "mualice", "xestelik", "vaksin", "derman",
-        "doza", "antibiot", "peyvend", "parazit", "kend", "teserrufat"
+        "doza", "antibiot", "peyvend", "parazit", "kend", "teserrufat",
+        "animal", "livestock", "sheep", "cattle", "poultry", "farming",
+        "crop", "agric", "soil", "harvest", "beekeep"
     };
     for (const auto& w : az_words(text)) {
         for (const char* s : STEMS) {

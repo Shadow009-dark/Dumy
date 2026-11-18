@@ -7,6 +7,7 @@
 #include <unordered_set>
 
 #include "dumy/chunker.h"
+#include "dumy/az_quality.h"
 #include "dumy/common.h"
 #include "dumy/meta_commands.h"
 
@@ -102,15 +103,11 @@ QuestionType Retriever::analyze(const std::string& question) const {
     }
 
     // Everyday/general questions are usually short and not agriculture-related.
-    static const std::vector<const char*> agri = {
-        "heyvan", "heyvand", "qoyun", "mal-", "malı", "süd", "sud ", "quş", "qush",
-        "toxum", "əkin", "ekin", "torpaq", "maldar", "çoban", "ferm", "baytar",
-        "yem ", "yeml", "arıç", "aric", "təsərrüf", "teserruf", "kənd", "kend",
-        "taxıl", "taxil", "meyvə", "meyve", "bagç", "hortum", "traktor", "beşiy", "pambiq",
-        "animal", "livestock", "sheep", "cattle", "poultry", "farming", "crop",
-        "veterinar", "agric", "soil", "harvest", "beekeep",
-    };
-    if (!contains_any(q, agri)) return QuestionType::General;
+    // STEP 5: one shared list (has_agri_keyword in az_quality.h). The local
+    // copy here missed dana/buzov/toyuq/keci/ari/quzu/at/camis/qaramal/
+    // mal-qara/ordek/hinduska, so "Dana ishalı olduqda nə etmək lazımdır?"
+    // was routed as a general question and answered from the model's memory.
+    if (!has_agri_keyword(q)) return QuestionType::General;
 
     return QuestionType::SimpleFact;
 }
