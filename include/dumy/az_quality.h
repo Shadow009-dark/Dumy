@@ -962,6 +962,16 @@ struct AzWordStats {
     double ratio() const { return total ? static_cast<double>(unknown) / total : 0.0; }
 };
 
+// Share of invented words that makes an UNCITED answer unusable. The 0.12
+// document-level threshold cannot see a few invented words in a long answer:
+// "Dana ishalı olduqda nə etmək lazımdır?" measured 4/97 = 0.041 and 3/73 =
+// 0.041 with `bəluruminin` / `qaraşdırıq` still in the text
+// (test_results/species_diagnosis.md). Across the 16 answers the 30-question
+// probe could measure, clean answers stayed at 0.000-0.020 and the damaged
+// Q7 samples at 0.041-0.048; 0.035 sits in that gap. Used only when no
+// citation survived validation - an answer with sources keeps the 0.12 rule.
+constexpr double kUncitedUnknownRatioMax = 0.035;
+
 inline AzWordStats measure_unknown_words(const std::string& text,
                                          const std::unordered_set<std::string>& vocab,
                                          const std::unordered_set<std::string>& prefixes) {

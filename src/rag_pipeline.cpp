@@ -2059,6 +2059,95 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     // the sources list instead of an inline label.
     std::vector<Chunk> excerpt_chunks;
     bool gate_used_tier4 = false;
+    // --- 7a2. uncited answers with invented words --------------------------
+    // Measured (test_results/species_diagnosis.md): the Q7 draft kept
+    // `bəluruminin` / `qaraşdırıq` at unknown-word ratios 0.041-0.048, far
+    // below garbled_word_ratio_max 0.12, and every citation was dropped by
+    // enforce_citation_support(). A long answer dilutes a few invented words,
+    // so the ratio alone cannot catch them; the pair (no surviving citation,
+    // invented words) can. One deterministic regeneration with the selected
+    // chunks, then the source excerpts instead of the invented prose.
+    {
+        auto cite_labels = [](const std::string& s) {
+            size_t n = 0;
+            for (size_t p = 0; (p = s.find("[Mənbə:", p)) != std::string::npos; p += 8) ++n;
+            return n;
+        };
+        const AzWordStats ws = unknown_word_stats(final_answer);
+        const bool checkable =
+            ws.total >= static_cast<size_t>(cfg_.garbled_word_min_words);
+        if (!selected.empty() && cite_labels(final_answer) == 0 && checkable &&
+            ws.ratio() > kUncitedUnknownRatioMax) {
+            log_warn("uncited answer: unknown=" + std::to_string(ws.unknown) + "/" +
+                     std::to_string(ws.total) + " ratio=" + std::to_string(ws.ratio()) +
+                     " > " + std::to_string(kUncitedUnknownRatioMax) +
+                     " with no surviving citation - strict retry with " +
+                     std::to_string(selected.size()) + " chunk(s)");
+            std::vector<Chunk> retry_ctx = selected;
+            {
+                const size_t retry_limit = cfg_.num_ctx > 800
+                                               ? static_cast<size_t>(cfg_.num_ctx) - 800
+                                               : size_t(400);
+                while (retry_ctx.size() > 1 && total_tokens(retry_ctx, cpt) > retry_limit)
+                    retry_ctx.pop_back();
+            }
+            std::string uerr;
+            ChatTiming utiming;
+            StageTimer t_u;
+            std::string regen = ollama_.chat(
+                chat_model_, {{"user", build_strict_context_message(retry_ctx, q)}},
+                cfg_.chat_options(std::min(cfg_.num_predict_draft, 400), 0.0), &uerr,
+                &utiming);
+            log_model_call("uncited_retry", chat_model_,
+                           static_cast<long long>(t_u.ms()), utiming.load_ms,
+                           utiming.prompt_eval_ms, utiming.eval_ms,
+                           utiming.prompt_tokens, utiming.eval_tokens,
+                           utiming.done_reason);
+            regen = trim(strip_dangling_source_label(strip_clarification_offer(
+                strip_silent_check(strip_safety_line(strip_own_sources(
+                    OllamaClient::strip_thinking(regen)))))));
+            regen = enforce_citation_support(
+                validate_source_labels(regen, retry_ctx), retry_ctx);
+            const AzWordStats ws2 = unknown_word_stats(regen);
+            const bool regen_ok =
+                !regen.empty() && !is_degenerate_answer(regen) &&
+                !has_repetition_loop(regen) &&
+                (cite_labels(regen) > 0 || !ws2.total ||
+                 ws2.ratio() <= kUncitedUnknownRatioMax);
+            if (regen_ok) {
+                final_answer = regen;
+                log_info("uncited answer: strict retry accepted (unknown=" +
+                         std::to_string(ws2.unknown) + "/" +
+                         std::to_string(ws2.total) + ", citations=" +
+                         std::to_string(cite_labels(regen)) + ")");
+            } else {
+                const std::string bullets =
+                    build_excerpt_bullets(q, selected, 3, 400, &excerpt_chunks);
+                if (!bullets.empty()) {
+                    final_answer = trim(bullets);
+                    log_info("uncited answer: retry still uncited/garbled - source excerpts "
+                             "used (" + std::to_string(excerpt_chunks.size()) +
+                             " chunk(s))");
+                } else {
+                    std::string ex3;
+                    if (extract_best_sentence(q, selected, &ex3) &&
+                        !is_degenerate_answer(ex3) && !has_repetition_loop(ex3)) {
+                        final_answer = ex3;
+                        log_info("uncited answer: no excerpt bullets - extractive fallback used");
+                    } else {
+                        final_answer = helpful_uncertainty(q);
+                        gate_used_tier4 = true;
+                        log_warn("uncited answer: no usable excerpt - honest failure message");
+                    }
+                }
+            }
+            trace_attempts.push_back({{"attempt", 0},
+                                      {"purpose", "uncited_retry"},
+                                      {"raw", utf8_prefix(final_answer, 400)},
+                                      {"chars", final_answer.size()},
+                                      {"verdict", regen_ok ? "accepted" : "excerpts"}});
+        }
+    }
     // --- 7b. answer-quality gate ------------------------------------------
     // Never return an empty answer, a bare clarification offer, a generation
     // loop or (for a general question) an answer that drifted into the
