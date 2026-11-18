@@ -837,26 +837,11 @@ AnswerResult RagPipeline::answer(const std::string& question,
 
 namespace {
 // E3(a): faithful extractive fallback. Sentence-level stem overlap on folded
-// tokens (first 5 letters), plus a digit when the question asks for a number.
-std::vector<std::string> ex_stems(const std::string& s) {
-    const std::string f = az_fold(s);
-    std::vector<std::string> out;
-    std::string cur;
-    for (unsigned char ch : f) {
-        if (ch >= 'a' && ch <= 'z') {
-            cur += static_cast<char>(ch);
-        } else {
-            if (cur.size() >= 5) out.push_back(cur.substr(0, 5));
-            cur.clear();
-        }
-    }
-    if (cur.size() >= 5) out.push_back(cur.substr(0, 5));
-    return out;
-}
-
+// tokens (first 5 letters, az_stems5 in az_quality.h), plus a digit when the
+// question asks for a number.
 bool extract_best_sentence(const std::string& question, const std::vector<Chunk>& chunks,
                            std::string* out) {
-    const std::vector<std::string> qs = ex_stems(question);
+    const std::vector<std::string> qs = az_stems5(question);
     if (qs.empty()) return false;
     const std::string qf = az_fold(question);
     const bool wants_number = qf.find("nece") != std::string::npos ||
@@ -2025,6 +2010,10 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
                      std::to_string(ws.ratio()));
         }
     }
+    // Chunks quoted verbatim in a source-excerpt answer (STEP 4). They go to
+    // the sources list instead of an inline label.
+    std::vector<Chunk> excerpt_chunks;
+    bool gate_used_tier4 = false;
     // --- 7b. answer-quality gate ------------------------------------------
     // Never return an empty answer, a bare clarification offer, a generation
     // loop or (for a general question) an answer that drifted into the
@@ -2114,7 +2103,27 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
                      std::to_string(final_answer.size()) + " chars)");
         } else if (degenerate || repetitive || off_domain) {
             std::string ex;
-            if (extract_best_sentence(q, selected, &ex) && !is_degenerate_answer(ex) &&
+            // STEP 4: a rejected BroadTopic/Diagnosis answer still shows what
+            // the sources say - 2-3 excerpts as bullets, not one short sentence
+            // that reads like a truncated fragment.
+            if ((qtype == QuestionType::BroadTopic || qtype == QuestionType::Diagnosis) &&
+                !selected.empty()) {
+                const std::string bullets = build_excerpt_bullets(q, selected, 3, 400, &excerpt_chunks);
+                if (!bullets.empty()) {
+                    final_answer = trim(bullets);
+                    trace_attempts.push_back({{"attempt", 0},
+                                              {"purpose", "source_bullets"},
+                                              {"raw", utf8_prefix(final_answer, 400)},
+                                              {"chars", final_answer.size()},
+                                              {"verdict", "accepted"}});
+                    log_info("quality gate: source excerpts used (" +
+                             std::to_string(excerpt_chunks.size()) + " chunk(s), " +
+                             std::to_string(final_answer.size()) + " chars)");
+                }
+            }
+            if (!excerpt_chunks.empty()) {
+                // handled above
+            } else if (extract_best_sentence(q, selected, &ex) && !is_degenerate_answer(ex) &&
                 !has_repetition_loop(ex)) {
                 final_answer = ex;
                 trace_attempts.push_back({{"attempt", 0}, {"purpose", "extractive_fallback"},
@@ -2132,8 +2141,13 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
             } else {
                 final_answer = helpful_uncertainty(q);
                 arb_branch = "tier4";
+                gate_used_tier4 = true;
             }
-            log_warn("quality gate: strict retry failed - honest failure message");
+            if (gate_used_tier4)
+                log_warn("quality gate: strict retry failed - honest failure message");
+            else
+                log_info("quality gate: strict retry rejected - fallback answer used (" +
+                         std::to_string(final_answer.size()) + " chars)");
         } else {
             log_warn("quality gate: strict retry not better - keeping short draft");
         }
@@ -2167,12 +2181,15 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     // Never return an answer that stops mid-word / mid-sentence.
     final_answer = trim_to_last_sentence(final_answer);
     res.used_chunks = cited_chunks(final_answer, selected);
+    // Excerpts have no inline labels: their chunks are the sources.
+    if (!excerpt_chunks.empty()) res.used_chunks = excerpt_chunks;
 
     // Deterministic provenance fallback: the 4B model often answers from the
     // kept context without writing a "[Mənbə: ...]" label, which left grounded
     // livestock answers with zero PDF sources. Cite the best non-web chunk once
     // when the answer really shares key terms with it.
-    if (final_answer.find("[Mənbə:") == std::string::npos && !selected.empty()) {
+    if (excerpt_chunks.empty() && final_answer.find("[Mənbə:") == std::string::npos &&
+        !selected.empty()) {
         const auto terms = relevance_key_terms(q);
         for (const auto& c : selected) {
             if (c.kind == "web" || c.source.empty()) continue;

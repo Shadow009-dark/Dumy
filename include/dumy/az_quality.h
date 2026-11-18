@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "dumy/common.h"
+#include "dumy/vector_store.h"
 
 namespace dumy {
 
@@ -1300,6 +1301,26 @@ inline std::string clean_answer_text(const std::string& in) {
         out.push_back(c);
     }
     return trim(out);
+}
+
+// ---------------------------------------------------------------------------
+// Source excerpts (STEP 4)
+// ---------------------------------------------------------------------------
+// Sentence-matching stems: folded tokens truncated to five letters (E3a).
+inline std::vector<std::string> az_stems5(const std::string& s) {
+    const std::string f = az_fold(s);
+    std::vector<std::string> out;
+    std::string cur;
+    for (unsigned char ch : f) {
+        if (ch >= 'a' && ch <= 'z') {
+            cur += static_cast<char>(ch);
+        } else {
+            if (cur.size() >= 5) out.push_back(cur.substr(0, 5));
+            cur.clear();
+        }
+    }
+    if (cur.size() >= 5) out.push_back(cur.substr(0, 5));
+    return out;
 }
 
 }  // namespace dumy

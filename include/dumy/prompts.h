@@ -1178,6 +1178,52 @@ inline bool is_degenerate_answer(const std::string& answer) {
     return t.empty() || is_clarification_only_answer(answer);
 }
 
+// What the sources actually say, as bullets. When the gate rejects a
+// BroadTopic/Diagnosis draft, one mangled extractive sentence is a poor answer:
+// show the two or three best excerpts instead. The bullets carry no inline
+// labels - provenance goes to the sources list (used).
+inline std::string build_excerpt_bullets(const std::string& question,
+                                         const std::vector<Chunk>& chunks,
+                                         size_t max_items, size_t max_chars,
+                                         std::vector<Chunk>* used) {
+    const std::vector<std::string> qs = az_stems5(question);
+    if (qs.empty() || chunks.empty()) return std::string();
+    std::string out;
+    size_t items = 0;
+    for (const auto& c : chunks) {
+        if (items >= max_items) break;
+        std::string best;
+        size_t best_score = 0;
+        size_t pos = 0;
+        while (pos < c.text.size()) {
+            size_t end = c.text.size();
+            for (size_t i = pos; i + 1 < c.text.size(); ++i) {
+                const char ch = c.text[i];
+                const char nx = c.text[i + 1];
+                if ((ch == '.' || ch == '!' || ch == '?') && (nx == ' ' || nx == '\n')) {
+                    end = i + 1;
+                    break;
+                }
+                if (ch == '\n') { end = i; break; }
+            }
+            std::string sent = trim(c.text.substr(pos, end - pos));
+            pos = end + 1;
+            if (sent.size() < 40 || sent.size() > max_chars) continue;
+            if (is_degenerate_answer(sent) || has_repetition_loop(sent)) continue;
+            size_t score = 0;
+            for (const auto& st : qs)
+                if (az_fold(sent).find(st) != std::string::npos) ++score;
+            if (score > best_score) { best_score = score; best = sent; }
+        }
+        if (best.empty() || best_score < 2) continue;
+        if (out.empty()) out = "Qısa çıxarışlar:\n";
+        out += "- " + best + "\n";
+        if (used) used->push_back(c);
+        ++items;
+    }
+    return out;
+}
+
 // A simple general-knowledge question (definition / explanation) with no
 // livestock or agronomy term. The PDFs are agriculture books, so for these a
 // matching word inside an animal-biochemistry chapter is not a real source.

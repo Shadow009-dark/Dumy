@@ -9,6 +9,7 @@
 #include <string>
 
 #include "dumy/az_quality.h"
+#include "dumy/prompts.h"
 
 namespace {
 
@@ -99,6 +100,53 @@ int main() {
     // 10) No chunks + livestock/crop/medicine: never a free general answer.
     check(strict_retry_mode(false, true) == StrictRetryMode::Tier4Text,
           "no chunks + domain question -> Tier 4 text, no free answer");
+
+    // 11) STEP 4: a rejected BroadTopic/Diagnosis answer shows 2-3 source
+    //     excerpts as bullets, with no inline [Mənbə: ...] label.
+    auto make_chunk = [](const std::string& text, const char* file, int page) {
+        Chunk c;
+        c.text = text;
+        c.source = file;
+        c.page = page;
+        c.kind = "pdf";
+        return c;
+    };
+    std::vector<Chunk> excerpts{
+        make_chunk("Timpaniya zamanı qarın şişməsi sürətlə artır və bu halda heyvana\n"
+                   "təcili müalicə vermək lazımdır.",
+                   "Heyvandarlığın əsasları.pdf", 210),
+        make_chunk("Timpaniya zamanı ilk addım heyvanın vəziyyətini yoxlamaq və müalicəyə\n"
+                   "dərhal başlamaqdır.",
+                   "Heyvandarlığın əsasları.pdf", 211),
+        make_chunk("Bu kitabda taxıl becərilməsi və onun agrotexnikası barədə yazılmışdır.",
+                   "Bitkiçilik.pdf", 40)};
+    std::vector<Chunk> used;
+    const std::string bullets = build_excerpt_bullets(
+        "Timpaniya zamanı hansı müalicə lazımdır?", excerpts, 3, 400, &used);
+    auto bullet_lines = [](const std::string& text) {
+        size_t n = 0;
+        for (size_t i = 0; i + 1 < text.size(); ++i)
+            if (text[i] == '\n' && text[i + 1] == '-') ++n;
+        return n;
+    };
+    check(!bullets.empty() && bullets.find("Qısa çıxarışlar:") == 0 &&
+              bullets.find("[Mənbə:") == std::string::npos &&
+              bullet_lines(bullets) == 2 && used.size() == 2,
+          "rejected answer becomes 2 source-excerpt bullets");
+
+    // 12) The item cap is respected.
+    std::vector<Chunk> used1;
+    const std::string one =
+        build_excerpt_bullets("Timpaniya zamanı hansı müalicə lazımdır?", excerpts, 1, 400,
+                              &used1);
+    check(bullet_lines(one) == 1 && used1.size() == 1,
+          "excerpt bullets respect the item cap");
+
+    // 13) No relevant excerpt -> no bullets (the caller falls back further).
+    std::vector<Chunk> none;
+    check(build_excerpt_bullets("Timpaniya zamanı hansı müalicə lazımdır?", {}, 3, 400, &none)
+                  .empty(),
+          "no chunks -> no excerpt bullets");
 
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
