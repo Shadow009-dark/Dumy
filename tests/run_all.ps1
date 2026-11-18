@@ -242,7 +242,10 @@ foreach ($c in $cases) {
         $j = $raw | ConvertFrom-Json
         $answer = [string]$j.answer
         $qtype = [string]$j.qtype
-        $pdfSources = @($j.sources | Where-Object { $_.type -eq 'pdf' }).Count
+        # One book cited on three pages is ONE PDF source, not three: count
+        # distinct files, not entries (measured in test_results/gate_after.md).
+        $pdfSources = @($j.sources | Where-Object { $_.type -eq 'pdf' } |
+            ForEach-Object { [string]$_.file } | Sort-Object -Unique).Count
     } catch {
         $problems.Add('response is not JSON') | Out-Null
     }
@@ -369,7 +372,10 @@ Invoke-Api 'POST' '/memory/toggle' $memClient @{ enabled = $true } | Out-Null
 Send-ChatBody (Read-Fixture 'fact_statement.json') $memClient 'pre' | Out-Null
 $r6 = Send-ChatBody (Read-Fixture 'livestock.json') $memClient 'liv'
 $pdfCount = 0
-if ($r6.json -and $r6.json.sources) { $pdfCount = @($r6.json.sources | Where-Object { $_.type -eq 'pdf' }).Count }
+if ($r6.json -and $r6.json.sources) {
+    $pdfCount = @($r6.json.sources | Where-Object { $_.type -eq 'pdf' } |
+        ForEach-Object { [string]$_.file } | Sort-Object -Unique).Count
+}
 Add-Row 'mem_no_pdf_pollution' (($r6.code -eq '200') -and ($r6.json.memory_used -ne $true)) $r6.seconds ('pdf=' + $pdfCount) ([string]$r6.json.answer)
 
 # --- per-client isolation + path traversal --------------------------------

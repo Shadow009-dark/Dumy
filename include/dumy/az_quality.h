@@ -208,8 +208,38 @@ inline std::string deterministic_sentence_correction(const std::string& original
 // ---------------------------------------------------------------------------
 // Repetition / degeneration detection
 // ---------------------------------------------------------------------------
+// Citation labels are metadata, not prose: [Mənbə: file.pdf, səh. 12],
+// [İnternet: url], [Ümumi bilik], [Xülasə: ...], [Söhbət yaddaşı]. They are
+// removed before any text-quality analysis - otherwise an answer that cites
+// the same book five times repeats the file name as a 4-gram and looks like a
+// generation loop (measured in test_results/gate_diagnosis.md).
+inline std::string strip_citation_tags(const std::string& in) {
+    std::string s = in;
+    size_t pos = 0;
+    while ((pos = s.find('[', pos)) != std::string::npos) {
+        const size_t close = s.find(']', pos);
+        if (close == std::string::npos) break;
+        const std::string inner = az_fold(s.substr(pos + 1, close - pos - 1));
+        const bool tag = inner.rfind("menbe", 0) == 0 ||
+                         inner.rfind("internet", 0) == 0 ||
+                         inner.rfind("xulase", 0) == 0 ||
+                         inner.rfind("umumi bilik", 0) == 0 ||
+                         inner.rfind("sohbet yaddasi", 0) == 0;
+        if (tag)
+            s.erase(pos, close - pos + 1);
+        else
+            pos = close + 1;
+    }
+    return s;
+}
+
+// Defined after has_agri_keyword below (it reuses the same stem list).
+inline bool az_is_domain_term(const std::string& word);
+
 inline bool has_repetition_loop(const std::string& text) {
-    const std::string t = trim(text);
+    // Citation labels are metadata: strip them first, or citing one book four
+    // times is indistinguishable from a loop (tests/gate_diagnosis.md).
+    const std::string t = trim(strip_citation_tags(text));
     if (t.size() < 80) return false;
     const auto words = az_words(t);
     if (words.size() < 12) return false;
@@ -221,20 +251,22 @@ inline bool has_repetition_loop(const std::string& text) {
                               words[i + 3];
         if (++grams[g] >= 3) return true;
     }
-    // One long word repeated many times. The threshold used to be 5, which
-    // flagged legitimate veterinary answers ("mastit" 5x in 900 chars) and
-    // forced a needless strict retry.
+    // One long word repeated many times. Domain terms are excluded: a dairy
+    // answer repeats "qaramal", "saqim" or "yem" in every paragraph, and the
+    // previous rule flagged exactly those (measured: gate_diagnosis.md Q4/Q8).
     std::unordered_map<std::string, int> counts;
     for (const auto& w : words)
-        if (w.size() >= 6 && ++counts[w] >= 6) return true;
-    // The same sentence twice.
+        if (w.size() >= 6 && !az_is_domain_term(w) && ++counts[w] >= 6) return true;
+    // The same sentence three times. Two was too tight: a numbered list that
+    // repeats a lead-in phrase ("cədvəl 14-də göstərildiyi kimi") is not a
+    // loop, and the earlier threshold forced needless strict retries.
     std::map<std::string, int> sentences;
     std::string cur;
     for (size_t i = 0; i < t.size(); ++i) {
         cur.push_back(t[i]);
         if (t[i] == '.' || t[i] == '!' || t[i] == '?') {
             const std::string s = trim(az_fold(cur));
-            if (s.size() >= 30 && ++sentences[s] >= 2) return true;
+            if (s.size() >= 30 && ++sentences[s] >= 3) return true;
             cur.clear();
         }
     }
@@ -313,6 +345,13 @@ inline bool has_agri_keyword(const std::string& text) {
         }
     }
     return false;
+}
+
+// One folded word that names a livestock / agronomy concept. A veterinary
+// answer mentions "qaramal" or "saqim" in every paragraph; that is normal
+// prose, not a generation loop, so the word rule below skips such terms.
+inline bool az_is_domain_term(const std::string& word) {
+    return has_agri_keyword(word);
 }
 
 // "Title: statement" - the manual-test format. A short title, a colon, then a
@@ -1199,23 +1238,8 @@ inline std::string filter_answer_sentences(const std::string& line) {
 }
 
 inline std::string clean_answer_text(const std::string& in) {
-    std::string s = in;
     // 1) inline tags: [Mənbə: ...], [İnternet: ...], [Ümumi bilik], ...
-    size_t pos = 0;
-    while ((pos = s.find('[', pos)) != std::string::npos) {
-        const size_t close = s.find(']', pos);
-        if (close == std::string::npos) break;
-        const std::string inner = az_fold(s.substr(pos + 1, close - pos - 1));
-        const bool tag = inner.rfind("menbe", 0) == 0 ||
-                         inner.rfind("internet", 0) == 0 ||
-                         inner.rfind("xulase", 0) == 0 ||
-                         inner.rfind("umumi bilik", 0) == 0 ||
-                         inner.rfind("sohbet yaddasi", 0) == 0;
-        if (tag)
-            s.erase(pos, close - pos + 1);
-        else
-            pos = close + 1;
-    }
+    std::string s = strip_citation_tags(in);
     // 2) meta lines anywhere in the text
     std::string kept;
     size_t start = 0;

@@ -135,6 +135,19 @@ else()
   target_compile_options(dumy PRIVATE -Wall -Wextra)
 endif()
 
+# ---------------- Unit tests (header-only, no server, no model) --------
+add_executable(dumy_unit_tests tests/test_quality_gate.cpp)
+target_include_directories(dumy_unit_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(dumy_unit_tests PRIVATE ${DUMY_JSON_LIB})
+if(MSVC)
+  target_compile_options(dumy_unit_tests PRIVATE /utf-8 /W3 /permissive-)
+  target_compile_definitions(dumy_unit_tests PRIVATE
+    _CRT_SECURE_NO_WARNINGS
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN
+  )
+endif()
+
 # Copy vcpkg runtime DLLs next to the .exe (Windows, dynamic triplet)
 if(WIN32 AND DEFINED VCPKG_INSTALLED_DIR)
   file(GLOB _DUMY_VCPKG_DLLS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/*.dll")
