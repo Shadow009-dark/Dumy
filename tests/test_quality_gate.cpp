@@ -168,6 +168,107 @@ int main() {
               !has_agri_keyword("2026-cı ildə dünya çempionu kim oldu?"),
           "shared agri list ignores general questions");
 
+    // ---- STEP 2 (species guard): 3 matches, 3 other-species, 2 generic ----
+    auto chunk = [](const std::string& text, const char* file) {
+        Chunk c;
+        c.text = text;
+        c.source = file;
+        c.page = 1;
+        c.kind = "pdf";
+        return c;
+    };
+    const Chunk goat_chunk = chunk(
+        "Keçilərdə dırnaq xəstəlikləri: dırnaq altlığının iltihabı və buynuz "
+        "hissəsinin çatlaması keçilərdə də rast gəlinir.", "Keçi.pdf");
+    const Chunk cattle_chunk = chunk(
+        "Qaramal dırnaq altlığının, dırnaq yumaşqlığının və dırnaq tacının "
+        "xəstəlikləri mal-qarada geniş yayılmışdır.", "İri buynuzlu.pdf");
+    const Chunk generic_chunk = chunk(
+        "Dırnaq xəstəliklərinin ağır və xronik forması vaxtında müalicə "
+        "olunmayanda ortaya çıxır.", "Cerrahiyye.pdf");
+    const Chunk sheep_chunk = chunk(
+        "Qoyunlarda dırnaq çürüməsi nəmli pəyərdə saxlanma ilə bağlıdır, "
+        "quzularda da təsadüf olunur.", "Qoyunçuluq.pdf");
+    const Chunk horse_chunk = chunk(
+        "Atların bağırsaq koliki qarın ağrısı ilə özünü göstərir.", "Atlar.pdf");
+
+    // 16) match: the cattle chunk is dropped, the goat one stays.
+    {
+        const SpeciesFilterResult r = filter_chunks_by_species(
+            az_species_in_question("Keçilərdə dırnaq xəstəlikləri hansılardır?"),
+            {cattle_chunk, goat_chunk});
+        check(r.matched && r.kept.size() == 1 && r.dropped == 1 &&
+                  r.kept[0].source == "Keçi.pdf",
+              "species: goat question drops the cattle chunk");
+    }
+
+    // 17) match: a generic chunk stays next to the matching one.
+    {
+        const SpeciesFilterResult r = filter_chunks_by_species(
+            az_species_in_question("Dana ishalı olduqda nə etmək lazımdır?"),
+            {generic_chunk, cattle_chunk});
+        check(r.matched && r.kept.size() == 2 && r.dropped == 0,
+              "species: generic chunks stay when a chunk matches");
+    }
+
+    // 18) match: a chunk naming the target and another group is usable.
+    {
+        const SpeciesFilterResult r = filter_chunks_by_species(
+            az_species_in_question("Quzu ishalı"), {sheep_chunk, horse_chunk});
+        check(r.matched && r.kept.size() == 1 && r.kept[0].source == "Qoyunçuluq.pdf" &&
+                  r.dropped == 1,
+              "species: sheep/lamb question keeps the sheep chunk");
+    }
+
+    // 19) other species only -> no match, nothing kept.
+    {
+        const SpeciesFilterResult r = filter_chunks_by_species(
+            az_species_in_question("Camışda mastit"), {cattle_chunk, sheep_chunk});
+        check(!r.matched && r.kept.empty(),
+              "species: buffalo question keeps no cattle/sheep chunk");
+    }
+
+    // 20) other species only, single chunk.
+    {
+        const SpeciesFilterResult r = filter_chunks_by_species(
+            az_species_in_question("Toyuqlarda qəbizlik"), {horse_chunk});
+        check(!r.matched && r.kept.empty(),
+              "species: poultry question keeps no horse chunk");
+    }
+
+    // 21) other species only, with a generic chunk in the mix.
+    {
+        const SpeciesFilterResult r = filter_chunks_by_species(
+            az_species_in_question("Arılarda nozematoz"), {generic_chunk, sheep_chunk});
+        check(!r.matched && r.kept.empty(),
+              "species: bee question with only generic/other chunks gets no context");
+    }
+
+    // 22) generic: generic-only chunks never count as a species match.
+    {
+        const SpeciesFilterResult r = filter_chunks_by_species(
+            az_species_in_question("Keçilərdə dırnaq xəstəlikləri"), {generic_chunk});
+        check(!r.matched && r.kept.empty(),
+              "species: generic-only chunks do not answer a species question");
+    }
+
+    // 23) generic: a question with no species is not filtered at all.
+    {
+        const SpeciesFilterResult r = filter_chunks_by_species(
+            az_species_in_question("Buğda əkini üçün torpaq necə hazırlanmalıdır?"),
+            {cattle_chunk, horse_chunk, generic_chunk});
+        check(r.kept.size() == 3 && r.dropped == 0,
+              "species: question without a species keeps every chunk");
+    }
+
+    // The Tier-4 text names the species that was asked.
+    {
+        const SpeciesQuery sq = az_species_in_question("Camışda mastit");
+        check(sq.name() == "buffalo" &&
+                  species_no_source_text(sq.label()).find("camış") != std::string::npos,
+              "species: Tier-4 text names the asked species");
+    }
+
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
 }

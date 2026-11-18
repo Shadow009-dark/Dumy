@@ -1636,8 +1636,39 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     }
     const double ms_rerank = t_rerank.ms();
 
-    // --- 4b. Tier 2 before generation, only when no chunk passed the gate ---
+    // --- 4a2. species guard -------------------------------------------------
+    // A goat question answered from the cattle surgery chapter is a wrong
+    // answer, not a style problem (test_results/species_diagnosis.md: Q10 had
+    // 1 goat chunk out of 4 and even that one was a cattle paragraph).
     std::string arb_branch = "pdf";
+    // Label of the questioned species when no chunk names it (empty otherwise).
+    std::string species_missing;
+    {
+        const SpeciesQuery species_q = az_species_in_question(q);
+        if (species_q.any()) {
+            const SpeciesFilterResult sf = filter_chunks_by_species(species_q, selected);
+            if (!sf.matched) {
+                // None of the retrieved chunks names the questioned species, so
+                // none of them may answer it. The curated Tier 2 entry (if any)
+                // is species-specific and is still allowed; without it the
+                // answer is the Tier-4 text below, never model prose about
+                // another animal (test_results/species_diagnosis.md: Q10).
+                species_missing = species_q.label();
+                log_warn("species guard: no source for " + species_q.name() + " (" +
+                         species_q.label() + ") - " + std::to_string(selected.size()) +
+                         " chunk(s) name only other species or none - context dropped");
+                selected.clear();
+            } else {
+                if (sf.dropped > 0)
+                    log_info("species guard: kept " + std::to_string(sf.kept.size()) +
+                             " chunk(s) for " + species_q.name() + ", dropped " +
+                             std::to_string(sf.dropped) + " naming only other species");
+                selected = sf.kept;
+            }
+        }
+    }
+
+    // --- 4b. Tier 2 before generation, only when no chunk passed the gate ---
     if (cfg_.knowledge_enabled && (selected.empty() || pdf_relevance_failed)) {
         if (const KnowledgeEntry* ke = knowledge_.match(q)) {
             res.answer = ke->answer;
@@ -1648,6 +1679,20 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
             log_info("knowledge_pre: " + ke->id);
             return res;
         }
+    }
+    if (!species_missing.empty()) {
+        const std::string text = species_no_source_text(species_missing);
+        log_warn("species guard: no source for " + species_missing +
+                 " and no curated entry - Tier 4");
+        res.answer = text;
+        res.species_no_source = true;
+        res.from_own_knowledge = false;
+        res.general_answer = false;
+        res.safety_warning = needs_safety_warning(q);
+        arb_branch = "species_no_source";
+        if (on_delta) on_delta(text);
+        sessions_.append(session_id, {"user", q}, {"assistant", text});
+        return res;
     }
     if (!rk_err.empty()) log_warn("rerank: " + rk_err);
 

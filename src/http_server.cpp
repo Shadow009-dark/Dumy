@@ -237,6 +237,7 @@ nlohmann::json notes_json(const AnswerResult& r) {
             {"safety_warning", r.safety_warning},
             {"no_pdf_context", pdfs == 0},
             {"refused", r.refused},
+            {"species_no_source", r.species_no_source},
             {"web_used", r.used_web}};
 }
 
@@ -454,6 +455,7 @@ bool HttpServer::start(std::string* err) {
                         {"sources", r.sources_json()},
                         {"qtype", r.qtype},
                         {"refused", r.refused},
+                        {"species_no_source", r.species_no_source},
                         {"web_used", r.used_web},
                         {"map_reduce", r.used_map_reduce},
                         {"own_knowledge", r.from_own_knowledge},
@@ -581,6 +583,7 @@ bool HttpServer::start(std::string* err) {
                         {"sources", r.sources_json()},
                         {"qtype", r.qtype},
                         {"refused", r.refused},
+                        {"species_no_source", r.species_no_source},
                         {"web_used", r.used_web},
                         {"map_reduce", r.used_map_reduce},
                         {"own_knowledge", r.from_own_knowledge},

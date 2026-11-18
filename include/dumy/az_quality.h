@@ -372,6 +372,148 @@ inline StrictRetryMode strict_retry_mode(bool has_context, bool domain_sensitive
     return domain_sensitive ? StrictRetryMode::Tier4Text : StrictRetryMode::WithoutContext;
 }
 
+// ---------------------------------------------------------------------------
+// Species guard
+// ---------------------------------------------------------------------------
+// The animal groups named in a question. Cattle (inək, mal, dana, buzov,
+// qaramal), sheep/lamb (qoyun, quzu, toğlu), goat/kid (keçi, oğlaq), buffalo,
+// horse, poultry and bee are separate groups on purpose - a goat question must
+// not be answered from the cattle chapter (test_results/species_diagnosis.md).
+// ONE table: the retriever guard and the later synonym module both read it.
+struct AzSpeciesGroup {
+    const char* label;  // printed in the answer: "keçi, oğlaq"
+    const char* name;   // stable id for logs: "goat"
+};
+
+inline const std::vector<AzSpeciesGroup>& az_species_groups() {
+    static const std::vector<AzSpeciesGroup> groups = {
+        {"inək, dana, mal-qara", "cattle"},
+        {"qoyun, quzu", "sheep"},
+        {"keçi, oğlaq", "goat"},
+        {"camış", "buffalo"},
+        {"at", "horse"},
+        {"toyuq, quş", "poultry"},
+        {"arı", "bee"},
+    };
+    return groups;
+}
+
+// Folded stems, index-aligned with az_species_groups().
+inline const std::vector<std::vector<std::string>>& az_species_stems() {
+    static const std::vector<std::vector<std::string>> stems = {
+        {"inek", "iney", "qaramal", "dana", "buzov", "duye", "mal", "malqara", "buzag"},
+        {"qoyun", "quzu", "toglu", "qoc"},
+        {"keci", "oglag"},
+        {"camis"},
+        {"at", "atlar", "qulun", "aygir"},
+        {"toyuq", "cuce", "xoruz", "hindus", "ordek", "qaz", "qus", "qusl", "firang"},
+        {"ari", "aril", "arici", "petek", "mum"},
+    };
+    return stems;
+}
+
+// Short stems ("at", "mal", "qaz") only match the whole token, so "at" does not
+// match "atmaq"; longer stems match inflected forms within +7 letters.
+inline bool az_species_token_matches(const std::string& w, const std::string& stem) {
+    if (w == stem) return true;
+    if (stem.size() < 4) return false;
+    return w.size() > stem.size() && w.rfind(stem, 0) == 0 &&
+           w.size() <= stem.size() + 7;
+}
+
+// Which species groups does this text name? Empty = generic text.
+inline std::vector<int> az_species_groups_in(const std::string& text) {
+    std::vector<int> out;
+    const auto& table = az_species_stems();
+    for (const auto& w : az_words(text)) {
+        for (size_t g = 0; g < table.size(); ++g) {
+            bool hit = false;
+            for (const auto& st : table[g])
+                if (az_species_token_matches(w, st)) { hit = true; break; }
+            if (hit && std::find(out.begin(), out.end(), static_cast<int>(g)) == out.end())
+                out.push_back(static_cast<int>(g));
+        }
+    }
+    return out;
+}
+
+struct SpeciesQuery {
+    std::vector<int> groups;
+    bool any() const { return !groups.empty(); }
+    std::string label() const {
+        const auto& table = az_species_groups();
+        std::string out;
+        for (int g : groups) {
+            if (!out.empty()) out += " / ";
+            out += table[static_cast<size_t>(g)].label;
+        }
+        return out;
+    }
+    std::string name() const {
+        const auto& table = az_species_groups();
+        std::string out;
+        for (int g : groups) {
+            if (!out.empty()) out += "+";
+            out += table[static_cast<size_t>(g)].name;
+        }
+        return out;
+    }
+};
+
+inline SpeciesQuery az_species_in_question(const std::string& question) {
+    SpeciesQuery sq;
+    sq.groups = az_species_groups_in(question);
+    return sq;
+}
+
+struct SpeciesFilterResult {
+    std::vector<Chunk> kept;
+    size_t dropped = 0;
+    // True when at least one chunk names the questioned species.
+    bool matched = false;
+};
+
+// Rule: keep chunks that name the questioned species and chunks that name no
+// species at all; drop chunks that name only other species. When nothing
+// matches, `kept` is empty and the caller must not answer from these chunks.
+inline SpeciesFilterResult filter_chunks_by_species(const SpeciesQuery& sq,
+                                                    const std::vector<Chunk>& chunks) {
+    SpeciesFilterResult r;
+    if (!sq.any()) {  // no species in the question: nothing to guard
+        r.kept = chunks;
+        return r;
+    }
+    std::vector<std::vector<int>> per_chunk;
+    per_chunk.reserve(chunks.size());
+    for (const auto& c : chunks) per_chunk.push_back(az_species_groups_in(c.text));
+    for (const auto& gs : per_chunk) {
+        for (int want : sq.groups) {
+            if (std::find(gs.begin(), gs.end(), want) != gs.end()) { r.matched = true; break; }
+        }
+        if (r.matched) break;
+    }
+    if (!r.matched) return r;
+    for (size_t i = 0; i < chunks.size(); ++i) {
+        bool target = false, other = false;
+        for (int g : per_chunk[i]) {
+            if (std::find(sq.groups.begin(), sq.groups.end(), g) != sq.groups.end()) target = true;
+            else other = true;
+        }
+        if (target || !other) r.kept.push_back(chunks[i]);
+        else ++r.dropped;
+    }
+    return r;
+}
+
+// Tier 4 for this case: name the species that was asked and say that no source
+// covers it, instead of answering with another animal's chapter.
+inline std::string species_no_source_text(const std::string& label) {
+    return "Bu heyvan növü üçün aydın mənbə tapılmadı (sorğu: " + label + "). "
+           "Kitablarda bu növ üçün uyğun bölmə yoxdur, ona görə cavabı başqa "
+           "heyvan növündən götürmürəm. Sualı dəqiqləşdirin (xəstəliyin adı, "
+           "heyvanın yaşı) və ya baytara müraciət edin.";
+}
+
 // "Title: statement" - the manual-test format. A short title, a colon, then a
 // declarative sentence (no question mark).
 inline bool is_title_statement(const std::string& q) {

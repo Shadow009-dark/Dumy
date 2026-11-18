@@ -54,6 +54,7 @@ struct AnswerResult {
     bool used_memory = false;           // a stored fact influenced the answer
     bool computed = false;              // arithmetic / feed calculator result
     bool general_answer = false;        // answered without PDF context
+    bool species_no_source = false;     // asked species has no source (Tier 4)
     bool safety_warning = false;        // UI shows the veterinary badge
     std::string warning;                // pipeline-level warning ("" = none)
 
