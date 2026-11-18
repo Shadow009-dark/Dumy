@@ -86,6 +86,20 @@ int main() {
               stripped.find("[1]") != std::string::npos,
           "strip_citation_tags removes labels, keeps [1]");
 
+    // 8) STEP 3: the strict retry must reuse the selected chunks.
+    check(strict_retry_mode(true, true) == StrictRetryMode::WithContext,
+          "retry with chunks reuses them (domain question)");
+    check(strict_retry_mode(true, false) == StrictRetryMode::WithContext,
+          "retry with chunks reuses them (general question)");
+
+    // 9) No chunks + a general question: a context-free retry is allowed.
+    check(strict_retry_mode(false, false) == StrictRetryMode::WithoutContext,
+          "no chunks + general question -> context-free retry");
+
+    // 10) No chunks + livestock/crop/medicine: never a free general answer.
+    check(strict_retry_mode(false, true) == StrictRetryMode::Tier4Text,
+          "no chunks + domain question -> Tier 4 text, no free answer");
+
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
 }

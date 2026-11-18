@@ -2054,9 +2054,40 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
         std::string serr;
         ChatTiming stiming;
         StageTimer t_strict;
-        std::string retry = ollama_.chat(
-            chat_model_, {{"user", build_strict_answer_message(q)}},
-            cfg_.chat_options(std::min(cfg_.num_predict_draft, 400), 0.0), &serr, &stiming);
+        // STEP 3: the retry keeps the evidence. A context-free retry answers
+        // from the model's own memory - in test_results/gate_diagnosis.md
+        // "Dana ishalı olduqda nə etmək lazımdır?" came back as infant-feeding
+        // advice with zero sources. Chunks may only be dropped when nothing
+        // survived retrieval; a livestock/crop/medicine question then gets the
+        // Tier-4 text instead of a free general answer.
+        std::vector<Chunk> retry_ctx = context_chunks;
+        {
+            const size_t retry_limit = cfg_.num_ctx > 800
+                                           ? static_cast<size_t>(cfg_.num_ctx) - 800
+                                           : size_t(400);
+            while (retry_ctx.size() > 1 && total_tokens(retry_ctx, cpt) > retry_limit)
+                retry_ctx.pop_back();
+        }
+        const bool retry_has_ctx = !retry_ctx.empty();
+        const bool domain_sensitive = has_agri_keyword(q) || needs_safety_warning(q);
+        const StrictRetryMode retry_mode = strict_retry_mode(retry_has_ctx, domain_sensitive);
+        std::string retry;
+        if (retry_mode == StrictRetryMode::WithContext) {
+            retry = ollama_.chat(
+                chat_model_, {{"user", build_strict_context_message(retry_ctx, q)}},
+                cfg_.chat_options(std::min(cfg_.num_predict_draft, 400), 0.0), &serr,
+                &stiming);
+            log_info("quality gate: strict retry with " +
+                     std::to_string(retry_ctx.size()) + " context chunk(s)");
+        } else if (retry_mode == StrictRetryMode::WithoutContext) {
+            retry = ollama_.chat(
+                chat_model_, {{"user", build_strict_answer_message(q)}},
+                cfg_.chat_options(std::min(cfg_.num_predict_draft, 400), 0.0), &serr,
+                &stiming);
+            log_info("quality gate: strict retry without context (no chunks survived)");
+        } else {
+            log_warn("quality gate: no context for a domain question - Tier 4 text");
+        }
         log_model_call("strict_retry", chat_model_,
                        static_cast<long long>(t_strict.ms()), stiming.load_ms,
                        stiming.prompt_eval_ms, stiming.eval_ms,

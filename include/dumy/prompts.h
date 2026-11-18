@@ -1116,6 +1116,18 @@ inline std::string build_strict_answer_message(const std::string& question) {
            "cümlələrlə Azərbaycan dilində ver.";
 }
 
+// Strict retry that KEEPS the evidence (STEP 3). The retry used to run without
+// any context, which turned a rejected draft into an invented answer
+// (test_results/gate_diagnosis.md: Q8 came back as infant-feeding advice).
+inline std::string build_strict_context_message(const std::vector<Chunk>& chunks,
+                                                const std::string& question) {
+    return build_context_block(chunks) + "\n\nSual: " + question +
+           "\n\nYalnız yuxarıdaki mənbələrə əsaslanaraq bu sualın cavabını yaz. "
+           "Mənbədə olmayan fakt, rəqəm və ya doza YAZMA. Giriş sözü, təklif, əlavə "
+           "sual, mənbə siyahısı və izah YAZMA. Cavabı tam, aydın cümlələrlə "
+           "Azərbaycan dilində ver.";
+}
+
 // True when stripping a clarification offer leaves nothing at all.
 inline bool is_clarification_only_answer(const std::string& answer) {
     if (trim(answer).empty()) return true;

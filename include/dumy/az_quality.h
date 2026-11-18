@@ -354,6 +354,18 @@ inline bool az_is_domain_term(const std::string& word) {
     return has_agri_keyword(word);
 }
 
+// How the strict retry is allowed to run (STEP 3). With surviving chunks it
+// must reuse them: a context-free retry answers from the model's own memory
+// (test_results/gate_diagnosis.md Q8: livestock diarrhoea came back as
+// infant-feeding advice). Without chunks a domain question may not fall back
+// to free generation at all - it gets the Tier-4 text instead.
+enum class StrictRetryMode { WithContext, WithoutContext, Tier4Text };
+
+inline StrictRetryMode strict_retry_mode(bool has_context, bool domain_sensitive) {
+    if (has_context) return StrictRetryMode::WithContext;
+    return domain_sensitive ? StrictRetryMode::Tier4Text : StrictRetryMode::WithoutContext;
+}
+
 // "Title: statement" - the manual-test format. A short title, a colon, then a
 // declarative sentence (no question mark).
 inline bool is_title_statement(const std::string& q) {
