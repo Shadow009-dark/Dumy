@@ -269,6 +269,28 @@ int main() {
               "species: Tier-4 text names the asked species");
     }
 
+    // ---- STEP 4 (cosmetics): dangling " ." / " :" after citations --------
+    {
+        const std::string cleaned = clean_answer_text(
+            "Cavab: dırnaqlar quru saxlanmalıdır [Mənbə: Qoyunçuluq.pdf, səh. 7] .");
+        check(cleaned.find(" .") == std::string::npos &&
+                  cleaned.find("[Mənbə") == std::string::npos && !cleaned.empty() &&
+                  cleaned.back() == '.',
+              "citations: a label before the full stop leaves no ' .'");
+    }
+    {
+        const std::string cleaned = clean_answer_text(
+            "Tədbirlər [Mənbə: Qoyunçuluq.pdf, səh. 9] : su və yem.");
+        check(cleaned.find(" :") == std::string::npos &&
+                  cleaned.find(": su") != std::string::npos,
+              "citations: a label before a colon leaves no ' :'");
+    }
+    {
+        const std::string kept = strip_dangling_punctuation("3.5 kq və səh. 5.");
+        check(kept == "3.5 kq və səh. 5.",
+              "cosmetics: decimals and 'səh. 5' are not punctuation gaps");
+    }
+
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
 }

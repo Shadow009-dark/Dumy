@@ -234,6 +234,25 @@ inline std::string strip_citation_tags(const std::string& in) {
     return s;
 }
 
+// A citation label that sat between a word and its punctuation leaves a
+// dangling " ." or " :" once the label is gone ("... bağlıdır [Mənbə: X.pdf,
+// səh. 7] ." -> "... bağlıdır ."). Only a space immediately before '.' or ':'
+// is removed, so decimals (3.5), ellipses and "səh. 5" stay untouched.
+inline std::string strip_dangling_punctuation(std::string s) {
+    for (;;) {
+        bool changed = false;
+        for (const char* p : {" .", " :"}) {
+            size_t pos = 0;
+            while ((pos = s.find(p, pos)) != std::string::npos) {
+                s.erase(pos, 1);
+                changed = true;
+            }
+        }
+        if (!changed) break;
+    }
+    return s;
+}
+
 // Defined after has_agri_keyword below (it reuses the same stem list).
 inline bool az_is_domain_term(const std::string& word);
 
@@ -1409,7 +1428,7 @@ inline std::string filter_answer_sentences(const std::string& line) {
 
 inline std::string clean_answer_text(const std::string& in) {
     // 1) inline tags: [Mənbə: ...], [İnternet: ...], [Ümumi bilik], ...
-    std::string s = strip_citation_tags(in);
+    std::string s = strip_dangling_punctuation(strip_citation_tags(in));
     // 2) meta lines anywhere in the text
     std::string kept;
     size_t start = 0;
