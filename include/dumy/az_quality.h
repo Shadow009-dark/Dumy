@@ -692,6 +692,19 @@ inline std::string species_no_source_text(const std::string& label) {
            "heyvanın yaşı) və ya baytara müraciət edin.";
 }
 
+// Query expansion is one extra helper-model call whose alternative queries are
+// sampled, so an identical request retrieves different chunks each run (S4
+// "Camışda mastit" -> "camel mastitis" on one run, "qamış qəlbəyin iltihabı" on
+// the next), which then flips the relevance gate; see
+// test_results/gate_regression.md. A short question gains nothing from that
+// sampling, so expansion is skipped when the question has at most max_words
+// words (the config value expansion.max_simple_words).
+// A non-positive max_words means "no word limit" (never skip on length).
+inline bool az_skip_expansion_for_length(const std::string& question, int max_words) {
+    if (max_words < 1) return false;
+    return static_cast<int>(az_words(question).size()) <= max_words;
+}
+
 // "Title: statement" - the manual-test format. A short title, a colon, then a
 // declarative sentence (no question mark).
 inline bool is_title_statement(const std::string& q) {

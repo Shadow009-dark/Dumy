@@ -379,6 +379,23 @@ int main() {
               "doc label: a chunk naming the species survives without a single book");
     }
 
+    // 30) Query expansion is skipped for a short question - at most
+    //     expansion.max_simple_words words. The helper model samples different
+    //     alternative queries on every run ("Camışda mastit" -> "camel
+    //     mastitis" vs "qamış qəlbəyin iltihabı"), the retrievers fuse them and
+    //     the relevance gate flips between identical runs
+    //     (test_results/gate_regression.md). The word count is az_words(), i.e.
+    //     the same tokenizer the quality helpers use.
+    {
+        const std::string ten = "bir iki uc dord bes alti yeddi sekkiz doqquz on";
+        check(az_skip_expansion_for_length("Camışda mastit", 10) &&
+                  az_skip_expansion_for_length("Dana ishalı olduqda nə etmək lazımdır?", 10) &&
+                  az_skip_expansion_for_length(ten, 10) &&
+                  !az_skip_expansion_for_length(ten + " onbir", 10) &&
+                  !az_skip_expansion_for_length("Camışda mastit", 0),
+              "expansion: <= max_simple_words words is short, one more is not");
+    }
+
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
 }

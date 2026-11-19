@@ -1449,6 +1449,8 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     // messages gain nothing from it (it once cost 20 s on a cold model).
     const bool skip_expansion =
         short_non_topic ||
+        (cfg_.expansion_skip_for_simple &&
+         az_skip_expansion_for_length(q, cfg_.expansion_max_simple_words)) ||
         (qtype == QuestionType::General && cfg_.expansion_skip_for_general);
     const std::vector<std::string> queries =
         skip_expansion ? std::vector<std::string>{q_retrieval}
