@@ -285,6 +285,21 @@ foreach ($c in $cases) {
             $problems.Add("PDF sources $pdfSources < $($c.min_pdf_sources)") | Out-Null
         }
     }
+    if ($c.expect_source_contains_any) {
+        # At least one cited PDF file name must contain one of these fragments
+        # (e.g. any of the bee books, without pinning one specific title).
+        $srcFiles = @($j.sources | Where-Object { $_.type -eq 'pdf' } |
+            ForEach-Object { [string]$_.file } | Sort-Object -Unique)
+        $hit = $false
+        foreach ($needle in @($c.expect_source_contains_any)) {
+            if (@($srcFiles | Where-Object { $_ -and $_.IndexOf([string]$needle, [StringComparison]::OrdinalIgnoreCase) -ge 0 }).Count -gt 0) {
+                $hit = $true
+            }
+        }
+        if (-not $hit) {
+            $problems.Add("no PDF source matching any of: $(@($c.expect_source_contains_any) -join ' | ')") | Out-Null
+        }
+    }
     if ($null -ne $c.max_garbage_ratio) {
         $ratio = Get-GarbageRatio $answer
         if ($ratio -gt [double]$c.max_garbage_ratio) {
