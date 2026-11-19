@@ -1684,13 +1684,18 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
                 log_warn("species guard: no source for " + species_q.name() + " (" +
                          species_q.label() + ") - " + std::to_string(selected.size()) +
                          " chunk(s) name only other species or come from a different "
-                         "species' document - context dropped" + census);
+                         "species' document" +
+                         (sf.named_only ? " (no document is labelled Single for it, "
+                                          "so generic chunks cannot inherit)"
+                                        : "") +
+                         " - context dropped" + census);
                 selected.clear();
             } else {
                 log_info("species guard: kept " + std::to_string(sf.kept.size()) +
                          " chunk(s) for " + species_q.name() + " (" +
                          (sf.by_document ? "by document label, no chunk names it"
                                          : "chunk names it") +
+                         (sf.named_only ? ", no Single document for it" : "") +
                          "), dropped " + std::to_string(sf.dropped));
                 selected = sf.kept;
             }

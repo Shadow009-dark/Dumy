@@ -343,15 +343,18 @@ int main() {
               "doc label: cattle question keeps a generic chunk of a cattle book");
     }
 
-    // 27) A generic chunk from a MULTI-species book stays usable for the goat
-    //     question next to the dropped cattle one.
+    // 27) NO document is labelled Single for the questioned species (goats),
+    //     so a generic chunk of a multi-species book is dropped too: it cannot
+    //     be attributed to the goat. This is the A6 rule - the TB pages of
+    //     multi-species books answered "Arılarda varroa" with cattle
+    //     vaccinations (test_results/doc_level_after.md A6).
     {
         const SpeciesFilterResult r = filter_chunks_by_species(
             az_species_in_question("Keçilərdə dırnaq xəstəlikləri"),
             {cattle_book, mixed_book}, &labels);
-        check(!r.matched && r.kept.size() == 1 && r.kept[0].source == "Qarışıq.pdf" &&
-                  r.dropped == 1 && r.by_document,
-              "doc label: generic chunk of a multi-species book stays");
+        check(!r.matched && r.kept.empty() && r.dropped == 2 && r.named_only &&
+                  !r.by_document,
+              "doc label: no single goat book drops generic chunks of every book");
     }
 
     // 28) The matcher no longer reads verbs and compounds as animals: STEP 1
@@ -361,6 +364,19 @@ int main() {
         check(az_species_groups_in("Keçirilir və mümkün qədər cücərmə olunur").empty() &&
                   az_species_groups_in("Keçilərdə və arılarda").size() == 2,
               "stems: keçir/mümkün/cücərmə are not species, keçilərdə/arılarda are");
+    }
+
+    // 29) ...but a chunk that NAMES the questioned species needs no single-book
+    //     label to survive (S4 buffalo: the camış chunk is the whole evidence).
+    {
+        const Chunk buffalo_book = chunk(
+            "Camışlarda mastit süd vəzisinin iltihabı kimi özünü göstərir.", "Qarışıq.pdf");
+        const SpeciesFilterResult r = filter_chunks_by_species(
+            az_species_in_question("Camışlarda mastit necə müalicə olunur?"),
+            {mixed_book, buffalo_book}, &labels);
+        check(r.matched && r.kept.size() == 1 && r.kept[0].source == "Qarışıq.pdf" &&
+                  r.dropped == 1 && !r.by_document && r.named_only,
+              "doc label: a chunk naming the species survives without a single book");
     }
 
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);

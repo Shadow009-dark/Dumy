@@ -614,12 +614,17 @@ struct SpeciesFilterResult {
     // True when no chunk names it but generic chunks of same-group or
     // multi-species documents may still answer it.
     bool by_document = false;
+    // True when no document is labelled with the questioned species, so only a
+    // chunk that names it could pass (generic chunks are dropped).
+    bool named_only = false;
 };
 
 // Rule: keep chunks that name the questioned species and generic chunks whose
 // document is about that species (or about several species); drop chunks that
 // name only other species and generic chunks from a document labelled with a
-// different species. Without document labels the old chunk-level rule applies.
+// different species. When NO document is labelled with the questioned species,
+// keep only the chunks that name it (a generic chunk belongs to no one).
+// Without document labels the old chunk-level rule applies.
 // An empty `kept` means the caller must not answer from these chunks.
 inline SpeciesFilterResult filter_chunks_by_species(
     const SpeciesQuery& sq, const std::vector<Chunk>& chunks,
@@ -638,8 +643,27 @@ inline SpeciesFilterResult filter_chunks_by_species(
         }
         if (r.matched) break;
     }
+    // Does ANY document carry a Single label for the questioned species? When
+    // none does, a generic chunk has no owner to inherit from and the only
+    // admissible evidence is a chunk that names the species. Without this, a
+    // bee question (A6, varroa) was answered from the generic TB pages of
+    // multi-species books and invented "vərəm vaksinləri" for bees
+    // (test_results/doc_level_after.md A6).
+    bool single_for_query = false;
+    if (doc_labels) {
+        for (const auto& kv : *doc_labels) {
+            const DocSpeciesLabel& l = kv.second;
+            if (l.kind != DocSpeciesKind::Single) continue;
+            if (std::find(sq.groups.begin(), sq.groups.end(), l.group) != sq.groups.end()) {
+                single_for_query = true;
+                break;
+            }
+        }
+    }
+    r.named_only = doc_labels && !single_for_query;
     auto generic_is_allowed = [&](const Chunk& c) -> bool {
-        if (!doc_labels) return r.matched;  // no document information: old rule
+        if (!doc_labels) return r.matched;    // no document information: old rule
+        if (!single_for_query) return false;  // nobody to inherit from: name it
         const DocSpeciesLabel* l = az_source_label(doc_labels, c.source);
         if (!l || l->kind != DocSpeciesKind::Single) return true;
         return std::find(sq.groups.begin(), sq.groups.end(), l->group) != sq.groups.end();
