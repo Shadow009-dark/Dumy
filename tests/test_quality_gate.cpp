@@ -291,6 +291,78 @@ int main() {
               "cosmetics: decimals and 'səh. 5' are not punctuation gaps");
     }
 
+    // ---- STEP 3 (document-level species label) ---------------------------
+    // A generic chunk (names no animal) inherits the label of its book. Three
+    // synthetic books, labelled by az_document_species_labels() itself so the
+    // test does not restate the thresholds.
+    const Chunk no_species = chunk(
+        "Dırnaq altlığının iltihabı vaxtında müalicə olunmazsa ağırlaşır.", "Cərrahiyyə.pdf");
+    std::vector<Chunk> corpus;
+    for (int i = 0; i < 60; ++i)
+        corpus.push_back(chunk("Qaramalın bəslənməsi və sağım qaydaları.", "Qaramal.pdf"));
+    for (int i = 0; i < 60; ++i)
+        corpus.push_back(chunk("Qoyunlar və keçilər bir yerdə saxlanılır.", "Qarışıq.pdf"));
+    for (int i = 0; i < 60; ++i)
+        corpus.push_back(chunk("Buğda əkini üçün torpaq hazırlanır.", "Buğda.pdf"));
+    // ...and the chunk under test belongs to the cattle book.
+    const Chunk cattle_book = chunk(
+        "Dırnaq altlığının iltihabı vaxtında müalicə olunmazsa ağırlaşır.", "Qaramal.pdf");
+    const Chunk mixed_book = chunk(
+        "Dırnaq altlığının iltihabı vaxtında müalicə olunmazsa ağırlaşır.", "Qarışıq.pdf");
+    const auto labels = az_document_species_labels(corpus);
+
+    // 24) The label is computed from the book, not given per chunk.
+    {
+        const auto cattle = labels.find("Qaramal.pdf");
+        const auto mixed = labels.find("Qarışıq.pdf");
+        const auto plant = labels.find("Buğda.pdf");
+        check(cattle != labels.end() && cattle->second.kind == DocSpeciesKind::Single &&
+                  cattle->second.name() == "cattle" &&
+                  mixed != labels.end() && mixed->second.kind == DocSpeciesKind::Multi &&
+                  plant != labels.end() && plant->second.kind == DocSpeciesKind::None,
+              "doc label: cattle book / mixed book / plant book");
+    }
+
+    // 25) A generic chunk from ANOTHER species' book is dropped for a goat
+    //     question, even though it names no animal at all.
+    {
+        const SpeciesFilterResult r = filter_chunks_by_species(
+            az_species_in_question("Keçilərdə dırnaq xəstəlikləri"),
+            {cattle_book}, &labels);
+        check(!r.matched && r.kept.empty() && r.dropped == 1 && !r.by_document,
+              "doc label: generic chunk from a cattle book is dropped for goats");
+    }
+
+    // 26) The same generic chunk is kept for a cattle question that names the
+    //     species in no chunk (the qarayara case: by document label).
+    {
+        const SpeciesFilterResult r = filter_chunks_by_species(
+            az_species_in_question("Mal-qarada qarayara xəstəliyinin əlamətləri nələrdir?"),
+            {cattle_book}, &labels);
+        check(!r.matched && r.kept.size() == 1 && r.by_document,
+              "doc label: cattle question keeps a generic chunk of a cattle book");
+    }
+
+    // 27) A generic chunk from a MULTI-species book stays usable for the goat
+    //     question next to the dropped cattle one.
+    {
+        const SpeciesFilterResult r = filter_chunks_by_species(
+            az_species_in_question("Keçilərdə dırnaq xəstəlikləri"),
+            {cattle_book, mixed_book}, &labels);
+        check(!r.matched && r.kept.size() == 1 && r.kept[0].source == "Qarışıq.pdf" &&
+                  r.dropped == 1 && r.by_document,
+              "doc label: generic chunk of a multi-species book stays");
+    }
+
+    // 28) The matcher no longer reads verbs and compounds as animals: STEP 1
+    //     measured 2225 of 2762 keci* tokens as keçir- and 1306 of 1382 mum*
+    //     as mümkün (test_results/doc_species.md).
+    {
+        check(az_species_groups_in("Keçirilir və mümkün qədər cücərmə olunur").empty() &&
+                  az_species_groups_in("Keçilərdə və arılarda").size() == 2,
+              "stems: keçir/mümkün/cücərmə are not species, keçilərdə/arılarda are");
+    }
+
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
 }

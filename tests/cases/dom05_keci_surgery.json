@@ -1,0 +1,1 @@
+{"id":"dom05_keci_surgery","question":"Keçilərdə dırnaq xəstəlikləri hansılardır?","qtype_in":["broad_topic","simple_fact","diagnosis","general"],"expect_not_contains":["Qaramal","İri buynuzlu"],"max_garbage_ratio":0.18,"max_seconds":45}
