@@ -431,28 +431,65 @@ inline const std::vector<std::vector<std::string>>& az_species_stems() {
     return stems;
 }
 
-// Short stems ("at", "mal", "qaz") only match the whole token, so "at" does not
-// match "atmaq"; longer stems match inflected forms within +7 letters.
+// The only continuation a stem may take is ONE complete nominal ending (plural,
+// possessive or case). An arbitrary prefix is not an inflection: measured over
+// the 6751 indexed chunks, the old "+7 letters" rule counted "keçirilir" (the
+// verb keçmək) as a goat 432 times and "mümkün" as bee wax 1306 times
+// (test_results/doc_species.md).
+inline bool az_species_ending(const std::string& rest) {
+    static const char* E[] = {"lar",   "ler",   "larin", "lerin", "lara",  "lere",
+                              "larda", "lerde", "lardan", "lerden", "lari", "leri",
+                              "in",    "un",    "nin",   "nun",   "ini",   "unu",
+                              "inin",  "unun",  "i",     "u",     "si",    "su",
+                              "a",     "e",     "da",    "de",    "dan",   "den",
+                              "ya",    "ye",    "ni",    "nu",    "liq",   "lik",
+                              "luq",   "luk"};
+    for (const char* e : E)
+        if (rest == e) return true;
+    return false;
+}
+
+// Short stems ("at", "mal", "qaz", "mum", "ari") may only take a plural marker
+// and a case ending: "arılarda" is a bee, "atlar" a horse, while "ata"
+// (father), "mümkün" (possible) and "qazanılmış" stay out.
 inline bool az_species_token_matches(const std::string& w, const std::string& stem) {
     if (w == stem) return true;
-    if (stem.size() < 4) return false;
-    return w.size() > stem.size() && w.rfind(stem, 0) == 0 &&
-           w.size() <= stem.size() + 7;
+    if (w.size() <= stem.size() || w.rfind(stem, 0) != 0) return false;
+    const std::string rest = w.substr(stem.size());
+    if (stem.size() < 4) {
+        for (const char* plural : {"lar", "ler"}) {
+            if (rest.rfind(plural, 0) != 0) continue;
+            const std::string tail = rest.substr(3);
+            if (tail.empty() || az_species_ending(tail)) return true;
+        }
+        return false;
+    }
+    return az_species_ending(rest);
+}
+
+// Token hits per group (index-aligned with az_species_stems()).
+inline void az_species_count(const std::string& text, std::vector<int>& counts) {
+    const auto& table = az_species_stems();
+    counts.assign(table.size(), 0);
+    for (const auto& w : az_words(text)) {
+        for (size_t g = 0; g < table.size(); ++g) {
+            for (const auto& st : table[g]) {
+                if (az_species_token_matches(w, st)) {
+                    ++counts[g];
+                    break;
+                }
+            }
+        }
+    }
 }
 
 // Which species groups does this text name? Empty = generic text.
 inline std::vector<int> az_species_groups_in(const std::string& text) {
+    std::vector<int> counts;
+    az_species_count(text, counts);
     std::vector<int> out;
-    const auto& table = az_species_stems();
-    for (const auto& w : az_words(text)) {
-        for (size_t g = 0; g < table.size(); ++g) {
-            bool hit = false;
-            for (const auto& st : table[g])
-                if (az_species_token_matches(w, st)) { hit = true; break; }
-            if (hit && std::find(out.begin(), out.end(), static_cast<int>(g)) == out.end())
-                out.push_back(static_cast<int>(g));
-        }
-    }
+    for (size_t g = 0; g < counts.size(); ++g)
+        if (counts[g] > 0) out.push_back(static_cast<int>(g));
     return out;
 }
 
@@ -485,18 +522,108 @@ inline SpeciesQuery az_species_in_question(const std::string& question) {
     return sq;
 }
 
+// ---------------------------------------------------------------------------
+// Document-level species label
+// ---------------------------------------------------------------------------
+// A book about cattle often answers a cattle question without repeating
+// "inək" on every page: the qarayara pages are cattle pages that name no
+// animal, and the chunk-level guard used to drop them (Tier 4 for
+// "Mal-qarada qarayara", test_results/species_after.md A1). The label below
+// says which species the WHOLE document is about, so a generic chunk inherits
+// it. Computed once at load time from every chunk of the source, through the
+// same shared table and stems.
+enum class DocSpeciesKind {
+    None,    // the document never names a species (a plant or lab book)
+    Single,  // one group dominates: generic chunks belong to it
+    Multi    // several groups are discussed: generic chunks are usable by all
+};
+
+struct DocSpeciesLabel {
+    DocSpeciesKind kind = DocSpeciesKind::None;
+    int group = -1;     // index into az_species_groups() when kind == Single
+    double share = 0.0; // dominant group mentions / all group mentions
+    int mentions = 0;   // dominant group token hits
+
+    std::string name() const {
+        if (kind == DocSpeciesKind::Single && group >= 0)
+            return az_species_groups()[static_cast<size_t>(group)].name;
+        return kind == DocSpeciesKind::Multi ? "multi" : "none";
+    }
+};
+
+// Thresholds read off the measured corpus distribution (test_results/
+// doc_species.md, recomputed after the stem fix): the labelled documents sit at
+// 0.90-0.97 with 287-3707 mentions and the highest unlabelled one at 0.64 with
+// 252 mentions, so 0.80 is inside that gap, and the 50-mention floor keeps a
+// 10-word document from getting a label.
+constexpr double kSpeciesDocShareMin = 0.80;
+constexpr int kSpeciesDocMentionsMin = 50;
+
+inline DocSpeciesLabel az_doc_species_label(const std::vector<const Chunk*>& doc_chunks) {
+    std::vector<long long> total_counts(az_species_stems().size(), 0);
+    std::vector<int> counts;
+    for (const Chunk* c : doc_chunks) {
+        if (!c) continue;
+        az_species_count(c->text, counts);
+        for (size_t g = 0; g < counts.size(); ++g) total_counts[g] += counts[g];
+    }
+    long long total = 0, best = 0;
+    int best_group = -1;
+    for (size_t g = 0; g < total_counts.size(); ++g) {
+        total += total_counts[g];
+        if (total_counts[g] > best) { best = total_counts[g]; best_group = static_cast<int>(g); }
+    }
+    DocSpeciesLabel label;
+    if (total == 0 || best_group < 0) return label;  // None
+    label.mentions = static_cast<int>(best);
+    label.share = static_cast<double>(best) / static_cast<double>(total);
+    if (best >= kSpeciesDocMentionsMin && label.share >= kSpeciesDocShareMin) {
+        label.kind = DocSpeciesKind::Single;
+        label.group = best_group;
+    } else {
+        label.kind = DocSpeciesKind::Multi;
+    }
+    return label;
+}
+
+inline std::map<std::string, DocSpeciesLabel> az_document_species_labels(
+    const std::vector<Chunk>& all_chunks) {
+    std::map<std::string, std::vector<const Chunk*>> by_source;
+    for (const auto& c : all_chunks) {
+        if (c.kind == "web") continue;  // a page is not a book
+        by_source[c.source].push_back(&c);
+    }
+    std::map<std::string, DocSpeciesLabel> labels;
+    for (const auto& kv : by_source) labels[kv.first] = az_doc_species_label(kv.second);
+    return labels;
+}
+
+// The document label of a chunk's source, or nullptr when unknown.
+inline const DocSpeciesLabel* az_source_label(
+    const std::map<std::string, DocSpeciesLabel>* labels, const std::string& source) {
+    if (!labels) return nullptr;
+    const auto it = labels->find(source);
+    return it == labels->end() ? nullptr : &it->second;
+}
+
 struct SpeciesFilterResult {
     std::vector<Chunk> kept;
     size_t dropped = 0;
     // True when at least one chunk names the questioned species.
     bool matched = false;
+    // True when no chunk names it but generic chunks of same-group or
+    // multi-species documents may still answer it.
+    bool by_document = false;
 };
 
-// Rule: keep chunks that name the questioned species and chunks that name no
-// species at all; drop chunks that name only other species. When nothing
-// matches, `kept` is empty and the caller must not answer from these chunks.
-inline SpeciesFilterResult filter_chunks_by_species(const SpeciesQuery& sq,
-                                                    const std::vector<Chunk>& chunks) {
+// Rule: keep chunks that name the questioned species and generic chunks whose
+// document is about that species (or about several species); drop chunks that
+// name only other species and generic chunks from a document labelled with a
+// different species. Without document labels the old chunk-level rule applies.
+// An empty `kept` means the caller must not answer from these chunks.
+inline SpeciesFilterResult filter_chunks_by_species(
+    const SpeciesQuery& sq, const std::vector<Chunk>& chunks,
+    const std::map<std::string, DocSpeciesLabel>* doc_labels = nullptr) {
     SpeciesFilterResult r;
     if (!sq.any()) {  // no species in the question: nothing to guard
         r.kept = chunks;
@@ -511,16 +638,24 @@ inline SpeciesFilterResult filter_chunks_by_species(const SpeciesQuery& sq,
         }
         if (r.matched) break;
     }
-    if (!r.matched) return r;
+    auto generic_is_allowed = [&](const Chunk& c) -> bool {
+        if (!doc_labels) return r.matched;  // no document information: old rule
+        const DocSpeciesLabel* l = az_source_label(doc_labels, c.source);
+        if (!l || l->kind != DocSpeciesKind::Single) return true;
+        return std::find(sq.groups.begin(), sq.groups.end(), l->group) != sq.groups.end();
+    };
     for (size_t i = 0; i < chunks.size(); ++i) {
         bool target = false, other = false;
         for (int g : per_chunk[i]) {
             if (std::find(sq.groups.begin(), sq.groups.end(), g) != sq.groups.end()) target = true;
             else other = true;
         }
-        if (target || !other) r.kept.push_back(chunks[i]);
+        if (target) r.kept.push_back(chunks[i]);
+        else if (other) ++r.dropped;
+        else if (generic_is_allowed(chunks[i])) r.kept.push_back(chunks[i]);
         else ++r.dropped;
     }
+    if (!r.matched && !r.kept.empty()) r.by_document = true;
     return r;
 }
 

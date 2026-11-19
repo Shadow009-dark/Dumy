@@ -407,6 +407,26 @@ RagPipeline::RagPipeline(const Config& cfg, OllamaClient& ollama, VectorStorePtr
     embedding_model_ = cfg_.embedding_model;
 }
 
+void RagPipeline::refresh_document_species() {
+    const size_t chunks = store_ ? store_->size() : 0;
+    if (chunks == 0) {
+        doc_species_.clear();
+        return;
+    }
+    doc_species_ = az_document_species_labels(store_->all());
+    size_t specific = 0;
+    std::string listed;
+    for (const auto& kv : doc_species_) {
+        if (kv.second.kind != DocSpeciesKind::Single) continue;
+        ++specific;
+        listed += "\n  " + kv.first + " -> " + kv.second.name() + " (" +
+                  std::to_string(kv.second.mentions) + " mentions, share " +
+                  std::to_string(kv.second.share).substr(0, 4) + ")";
+    }
+    log_info("doc species labels: " + std::to_string(doc_species_.size()) +
+             " document(s), " + std::to_string(specific) + " species-specific" + listed);
+}
+
 bool RagPipeline::initialize(std::string* err) {
     std::string perr;
     if (!ollama_.ping(&perr)) {
@@ -1646,23 +1666,32 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     {
         const SpeciesQuery species_q = az_species_in_question(q);
         if (species_q.any()) {
-            const SpeciesFilterResult sf = filter_chunks_by_species(species_q, selected);
-            if (!sf.matched) {
-                // None of the retrieved chunks names the questioned species, so
-                // none of them may answer it. The curated Tier 2 entry (if any)
-                // is species-specific and is still allowed; without it the
-                // answer is the Tier-4 text below, never model prose about
-                // another animal (test_results/species_diagnosis.md: Q10).
+            const auto* doc_labels = doc_species_.empty() ? nullptr : &doc_species_;
+            const SpeciesFilterResult sf =
+                filter_chunks_by_species(species_q, selected, doc_labels);
+            if (sf.kept.empty()) {
+                // Nothing here may answer the question: every chunk names only
+                // another species, or is generic text from another species'
+                // book. The curated Tier 2 entry (if any) is species-specific
+                // and is still allowed; without it the answer is the Tier-4
+                // text below, never model prose about another animal.
                 species_missing = species_q.label();
+                std::string census;
+                for (const auto& c : selected) {
+                    const DocSpeciesLabel* l = az_source_label(doc_labels, c.source);
+                    census += " | " + c.label() + " doc=" + (l ? l->name() : "unknown");
+                }
                 log_warn("species guard: no source for " + species_q.name() + " (" +
                          species_q.label() + ") - " + std::to_string(selected.size()) +
-                         " chunk(s) name only other species or none - context dropped");
+                         " chunk(s) name only other species or come from a different "
+                         "species' document - context dropped" + census);
                 selected.clear();
             } else {
-                if (sf.dropped > 0)
-                    log_info("species guard: kept " + std::to_string(sf.kept.size()) +
-                             " chunk(s) for " + species_q.name() + ", dropped " +
-                             std::to_string(sf.dropped) + " naming only other species");
+                log_info("species guard: kept " + std::to_string(sf.kept.size()) +
+                         " chunk(s) for " + species_q.name() + " (" +
+                         (sf.by_document ? "by document label, no chunk names it"
+                                         : "chunk names it") +
+                         "), dropped " + std::to_string(sf.dropped));
                 selected = sf.kept;
             }
         }

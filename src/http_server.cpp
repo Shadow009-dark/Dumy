@@ -630,6 +630,7 @@ bool HttpServer::start(std::string* err) {
         } guard{impl_->ingest_running};
         try {
             Indexer::Report rep = indexer_.ingest(force);
+            pipeline_.refresh_document_species();
             reply_json(req, res, rep.ok ? 200 : 500,
                        {{"status", rep.ok ? "ok" : "partial_error"},
                         {"files_seen", rep.files_seen},

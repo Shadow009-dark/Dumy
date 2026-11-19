@@ -174,6 +174,7 @@ int run_console(RagPipeline& pipeline, Indexer& indexer, const Config& cfg) {
         if (line == "/ingest") {
             std::cout << "İndeks yenilənir...\n";
             Indexer::Report r = indexer.ingest(true);
+            pipeline.refresh_document_species();
             std::cout << "Fayl: " << r.files_indexed << " indeksləşdi, " << r.files_failed
                       << " uğursuz, +" << r.chunks_added << " chunk\n";
             continue;
@@ -297,6 +298,9 @@ int main(int argc, char** argv) {
         if (indexer.load_index(&lerr)) {
             log_info("İndeks yükləndi: " + std::to_string(store->size()) + " chunk");
             indexer.rebuild_bm25();
+            // Document-level species labels: computed once from the loaded
+            // index, so a generic chunk knows which book it came from.
+            pipeline.refresh_document_species();
         } else if (!lerr.empty() && had_file) {
             log_warn("İndeks yüklənmədi: " + lerr + " (yenidən qurulacaq)");
         } else {
@@ -330,6 +334,8 @@ int main(int argc, char** argv) {
     } else if (cfg.auto_ingest && !ollama_ok) {
         log_warn("Ollama işləmədiyi üçün indeksləşdirmə təxirə salındı");
     }
+    // New chunks may have arrived: keep the document labels in step with them.
+    pipeline.refresh_document_species();
 
     // --- step 1: preload both models BEFORE the server reports ready --------
     // Ingest runs first because it loads bge-m3; warming afterwards means no

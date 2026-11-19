@@ -77,6 +77,10 @@ public:
     // Returns false when Ollama is unreachable (clear message in `err`).
     bool initialize(std::string* err);
 
+    // Document-level species labels, built from the whole index at load time
+    // and rebuilt after an ingest so a re-indexed book gets a fresh label.
+    void refresh_document_species();
+
     // Preloads the main model (num_predict=1, identical options to a real
     // draft) and bge-m3 (CPU), then verifies both through /api/ps.
     // Called at startup BEFORE the server reports ready.
@@ -139,6 +143,11 @@ private:
     mutable std::unordered_set<std::string> vocab_;
     mutable std::unordered_set<std::string> vocab_prefixes_;
     mutable std::once_flag vocab_once_;
+
+    // source -> species label of the whole document ("species-specific" vs
+    // "multi-species"). Empty until refresh_document_species() runs; empty at
+    // answer time means the chunk-level guard rule is used.
+    std::map<std::string, DocSpeciesLabel> doc_species_;
 
     const Config& cfg_;
     OllamaClient& ollama_;
