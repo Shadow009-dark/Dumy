@@ -19,8 +19,8 @@ Date: 2026-11-19. Branch `fix/species-doc-level`.
    shared table and stems; a document is `Single` when the dominant group has
    >= 0.80 of the document's group mentions and >= 50 of them, `Multi` otherwise and
    `None` when it names no species. `RagPipeline::refresh_document_species()` computes
-   the map from `store_->all()` at index load time (`src/main.cpp:299`, again after
-   ingest at `:333`, after a console `/ingest` at `:177` and after `POST /ingest` in
+   the map from `store_->all()` at index load time (`src/main.cpp:303`, again after
+   ingest at `:338`, after a console `/ingest` at `:177` and after `POST /ingest` in
    `src/http_server.cpp:633`).
 
 3. **The rule** (`filter_chunks_by_species`, third argument = label map):
@@ -102,7 +102,8 @@ the same computation printed with two decimals. `share 0.89` for SAĞIM is 0.895
 ```
 build: cmake --build build --config Release --target dumy dumy_unit_tests   exit 0
 dumy_unit_tests.exe                                                        28/28 passed
-testsun_all.ps1                                                        83/84 passed, 0 warnings
+tests
+un_all.ps1                                                        83/84 passed, 0 warnings
 ```
 
 The one failure is `t16_pdf_diagnosis` ("Gündəlik süd verimini necə artırmaq olar?"),
