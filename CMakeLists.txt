@@ -107,6 +107,9 @@ set(DUMY_SOURCES
   src/rag_pipeline.cpp
   src/session_manager.cpp
   src/http_server.cpp
+  src/key_manager.cpp
+  src/api_keys_api.cpp
+  src/weather_tool.cpp
   src/conversation_store.cpp
 )
 
@@ -156,6 +159,25 @@ if(WIN32 AND DEFINED VCPKG_INSTALLED_DIR)
       COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_DUMY_VCPKG_DLLS} $<TARGET_FILE_DIR:dumy>
       COMMENT "Copying vcpkg runtime DLLs next to dumy.exe")
   endif()
+endif()
+
+# ---------------- Weather tool tests (no server, no model, no network) --
+add_executable(dumy_weather_tests
+  tests/test_weather_tool.cpp
+  src/weather_tool.cpp
+  src/key_manager.cpp)
+target_include_directories(dumy_weather_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(dumy_weather_tests PRIVATE
+  Threads::Threads
+  ${DUMY_CURL_LIB}
+  ${DUMY_JSON_LIB})
+if(MSVC)
+  target_compile_options(dumy_weather_tests PRIVATE /utf-8 /W3 /permissive-)
+  target_compile_definitions(dumy_weather_tests PRIVATE
+    _CRT_SECURE_NO_WARNINGS
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN
+  )
 endif()
 
 install(TARGETS dumy RUNTIME DESTINATION bin)

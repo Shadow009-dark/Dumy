@@ -20,3 +20,7 @@ data/memory/
 # local tools (never commit binaries)
 tools/
 *.exe
+
+*.bak*
+
+config/api_keys.json

@@ -1,0 +1,10 @@
+{
+  "ai_api": {
+    "active_index": 0,
+    "keys": []
+  },
+  "weather_api": {
+    "active_index": 0,
+    "keys": []
+  }
+}
