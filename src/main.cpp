@@ -209,7 +209,7 @@ int run_console(RagPipeline& pipeline, Indexer& indexer, const Config& cfg) {
         if (srcs.is_array() && !srcs.empty()) {
             std::cout << "\nMənbələr:\n";
             for (const auto& s : srcs)
-                std::cout << "  - " << s.value("label", std::string()) << "\n";
+                std::cout << "  - " << s.value("file", std::string()) << "\n";
         }
         } catch (const std::exception& e) {
             std::cerr << "\n[XƏTA] " << e.what() << "\n";

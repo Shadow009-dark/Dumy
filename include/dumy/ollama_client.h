@@ -25,6 +25,9 @@ struct ChatOptions {
     int num_gpu = -1;       // -1 = model default; 0 = force CPU (embeddings)
     bool think = false;     // keep qwen3-style reasoning off for latency
     std::string keep_alive = "-1";  // -1 = never unload (Step 1 requirement)
+    // Per-call HTTP timeout in seconds; 0 = the client-wide request_timeout.
+    // A wedged Ollama runner then fails the call instead of hanging the UI.
+    int timeout_sec = 0;
 };
 
 // One entry of GET /api/ps (models currently loaded by Ollama).

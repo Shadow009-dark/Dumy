@@ -30,6 +30,8 @@
 
 #include "dumy/common.h"
 #include "dumy/prompts.h"
+#include "dumy/api_keys_api.h"
+#include "dumy/key_manager.h"
 
 namespace dumy {
 namespace {
@@ -256,6 +258,9 @@ struct HttpServer::Impl {
     std::string build_id = std::string(__DATE__) + " " + __TIME__;
     long long started_at = 0;
     long long pid = 0;
+    // External provider keys (OpenRouter / Gemini / OpenWeatherMap). Local UI
+    // only; DUMY's own Ollama path never consults this store.
+    std::unique_ptr<KeyManager> api_keys;
 };
 
 HttpServer::~HttpServer() = default;
@@ -281,6 +286,18 @@ bool HttpServer::start(std::string* err) {
     // Where the UI lives on disk (resolved against the config folder).
     const fs::path web_dir = cfg_.resolve(cfg_.web_folder);
     const fs::path index_html = web_dir / "index.html";
+
+    // --- External provider keys (additive) --------------------------------
+    // Stored beside config.json; the panel writes them, nothing is compiled in.
+    impl_->api_keys = std::make_unique<KeyManager>(cfg_.resolve("config/api_keys.json"));
+    {
+        std::string key_err;
+        if (!impl_->api_keys->load(&key_err))
+            log_warn("API açar faylı: " + key_err);
+    }
+    register_api_key_routes(svr, *impl_->api_keys, cfg_);
+    // The chat pipeline uses the same store for its internal weather tool.
+    pipeline_.set_key_manager(impl_->api_keys.get());
 
     // --- CORS preflight ----------------------------------------------------
     for (const char* path : {"/", "/chat", "/chat/stream", "/ingest", "/health",

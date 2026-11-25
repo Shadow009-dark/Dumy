@@ -48,6 +48,15 @@ struct Config {
     int web_cache_ttl_hours = 168;
     std::vector<std::string> trusted_domains;
 
+    // --- Weather tool (internal function call, no public endpoint) ---------
+    // The pipeline detects a weather question itself and asks OpenWeatherMap
+    // through KeyManager; the data is injected into the prompt.
+    bool weather_enabled = true;
+    std::string weather_default_city = "baku";  // used when no city is named
+    std::string weather_units = "metric";       // metric = °C, m/s
+    std::string weather_lang = "az";            // provider description language
+    int weather_cache_minutes = 10;              // in-memory result cache
+
     // --- Behaviour ---
     bool fast_mode = false;             // skip rerank + self-check for simple questions
     int request_timeout = 300;          // seconds per Ollama call

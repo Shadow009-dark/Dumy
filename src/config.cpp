@@ -81,6 +81,15 @@ Config Config::load(const std::string& path, std::string* err) {
     read_if(j, "web_fetch_timeout", c.web_fetch_timeout);
     read_if(j, "web_cache_ttl_hours", c.web_cache_ttl_hours);
     read_if(j, "trusted_domains", c.trusted_domains);
+    // Weather tool (internal tool call): "weather" block in config.json.
+    if (j.contains("weather") && j["weather"].is_object()) {
+        const auto& w = j["weather"];
+        read_if(w, "enabled", c.weather_enabled);
+        read_if(w, "default_city", c.weather_default_city);
+        read_if(w, "units", c.weather_units);
+        read_if(w, "lang", c.weather_lang);
+        read_if(w, "cache_minutes", c.weather_cache_minutes);
+    }
     read_if(j, "fast_mode", c.fast_mode);
     read_if(j, "request_timeout", c.request_timeout);
     read_if(j, "max_history_messages", c.max_history_messages);
@@ -278,6 +287,13 @@ nlohmann::json Config::to_json() const {
         {"web_fetch_timeout", web_fetch_timeout},
         {"web_cache_ttl_hours", web_cache_ttl_hours},
         {"trusted_domains", trusted_domains},
+        {"weather", {
+            {"enabled", weather_enabled},
+            {"default_city", weather_default_city},
+            {"units", weather_units},
+            {"lang", weather_lang},
+            {"cache_minutes", weather_cache_minutes}
+        }},
         {"fast_mode", fast_mode},
         {"request_timeout", request_timeout},
         {"max_history_messages", max_history_messages},

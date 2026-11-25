@@ -373,6 +373,49 @@
   .dumy-bot[data-state="error"] .dumy-b-head { animation: none; transform: rotate(-6deg); }
   .dumy-bot[data-state="error"] .dumy-b-ant { animation: none; transform: rotate(-28deg); }
   @media (prefers-reduced-motion: reduce) { .dumy-bot * { animation: none !important; } }
+  /* ---------------- API açarları paneli (əlavə modul) ---------------- */
+  #apikeys-dialog { width: min(880px, 94vw); }
+  .ak-tabs { display: flex; gap: 4px; margin: 0 0 12px; border-bottom: 1px solid var(--border); }
+  .ak-tab { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted);
+            padding: 8px 12px; font: inherit; cursor: pointer; margin-bottom: -1px; }
+  .ak-tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  .ak-hint { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .ak-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .ak-table th { text-align: left; font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+                 color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  .ak-table td { padding: 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .ak-table tr.ak-active td { background: var(--accent-soft); }
+  .ak-table tr.ak-active td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+  .ak-key { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; color: var(--muted); }
+  .ak-usage { min-width: 112px; }
+  .ak-usage small { display: block; color: var(--muted); font: 12px ui-monospace, Consolas, monospace; }
+  .ak-bar { height: 4px; background: var(--border); border-radius: 99px; margin-top: 6px; overflow: hidden; }
+  .ak-bar i { display: block; height: 100%; background: var(--accent); }
+  .ak-bar i.hot { background: var(--earth); }
+  .ak-bar i.full { background: var(--danger); }
+  .ak-status { font-size: 12px; padding: 3px 8px; border-radius: 99px;
+               border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+  .ak-status.active { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+  .ak-status.exhausted { color: var(--danger); border-color: var(--danger); }
+  .ak-status.quota_reached { color: var(--earth); border-color: var(--earth); }
+  .ak-actions { display: flex; gap: 6px; justify-content: flex-end; }
+  .ak-empty { text-align: center; color: var(--muted); padding: 18px 10px; }
+  .ak-add { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 14px; }
+  .ak-add h5 { margin: 0 0 10px; font-size: 12px; letter-spacing: .08em;
+               text-transform: uppercase; color: var(--muted); }
+  .ak-add-grid { display: grid; grid-template-columns: 1.1fr 1.8fr .7fr auto; gap: 8px; align-items: end; }
+  .ak-add-grid label { display: grid; gap: 5px; font-size: 12px; color: var(--muted); }
+  .ak-add-grid input, .ak-add-grid select { font: inherit; font-size: 13.5px; padding: 8px 10px;
+      border-radius: 10px; border: 1px solid var(--border); background: var(--bg-2); color: var(--text); width: 100%; }
+  .ak-add-grid input:focus, .ak-add-grid select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+  .ak-note { color: var(--muted); font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .ak-note.err { color: var(--danger); }
+  .ak-note.ok { color: var(--accent); }
+  .btn.ak-tiny { padding: 5px 10px; font-size: 12.5px; border-radius: 9px; }
+  @media (max-width: 700px) {
+    .ak-add-grid { grid-template-columns: 1fr 1fr; }
+    .ak-add-grid button { grid-column: 1 / -1; }
+  }
 </style>
 </head>
 <body>
@@ -411,6 +454,10 @@
     <button class="foot-btn" id="open-settings" type="button">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 2.6 14H2.5a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 7a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 2.6V2.5a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 21.4 10h.1a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.9 1Z"/></svg>
       Parametrlər
+    </button>
+    <button class="foot-btn" id="open-apikeys" type="button">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M21 7v5a2 2 0 0 1-2 2h-2"/><path d="M3 17v-5a2 2 0 0 1 2-2h10a4 4 0 0 1 0 8H9"/><circle cx="7" cy="10" r="2"/></svg>
+      API açarları
     </button>
   </div>
 </aside>
@@ -548,6 +595,36 @@
       <span class="switch"><input type="checkbox" id="tts-toggle"><span aria-hidden="true"></span></span>
     </div>
     <p>Səs tanıma brauzerin xidməti ilə işləyir və internet tələb edir. Audio DUMY serverinə göndərilmir və heç yerdə saxlanmır.</p>
+  </div>
+</dialog>
+
+<dialog id="apikeys-dialog" aria-labelledby="apikeys-title">
+  <div class="dlg-head">
+    <h4 id="apikeys-title">API açarları</h4>
+    <button class="icon-btn" type="button" id="apikeys-close" aria-label="Bağla">✕</button>
+  </div>
+  <div class="dlg-body">
+    <div class="ak-tabs" role="tablist">
+      <button class="ak-tab" type="button" role="tab" data-ak-tab="ai_api" aria-selected="true">AI modelləri</button>
+      <button class="ak-tab" type="button" role="tab" data-ak-tab="weather_api" aria-selected="false">Hava API</button>
+    </div>
+    <p class="ak-hint" id="ak-hint"></p>
+    <table class="ak-table">
+      <thead>
+        <tr><th>Provayder</th><th>Açar</th><th>İstifadə</th><th>Status</th><th style="text-align:right">Əməliyyat</th></tr>
+      </thead>
+      <tbody id="ak-rows"></tbody>
+    </table>
+    <form class="ak-add" id="ak-form">
+      <h5>Yeni açar əlavə et</h5>
+      <div class="ak-add-grid">
+        <label>Provayder<select id="ak-provider"></select></label>
+        <label>API açarı<input id="ak-key-input" type="password" autocomplete="off" spellcheck="false" placeholder="açarı buraya yapışdırın"></label>
+        <label>Limit<input id="ak-limit" type="number" min="0" step="1" value="200"></label>
+        <button class="btn primary" type="submit">Əlavə et</button>
+      </div>
+      <div class="ak-note" id="ak-note" role="status"></div>
+    </form>
   </div>
 </dialog>
 
@@ -1522,6 +1599,288 @@
     document.addEventListener("DOMContentLoaded", boot);
   } else {
     boot();
+  }
+})();
+</script>
+<script>
+/* API açarları paneli — ayrı blok, mövcud koda toxunmur. */
+(function () {
+  "use strict";
+
+  var SERVICE = {
+    ai_api: {
+      hint: "Aktiv açar əvvəl istifadə olunur. Provayder 429 (limit) və ya 401/402/403 (kvota) qaytaranda həmin açar bitmiş kimi işarələnir və sorğu növbəti açarla təkrarlanır.",
+      providers: [
+        { value: "openrouter", label: "OpenRouter", limit: 200 },
+        { value: "gemini", label: "Google Gemini", limit: 250 }
+      ]
+    },
+    weather_api: {
+      hint: "Hava aləti üçün açarlar. Açar rədd edilərsə, eyni sorğu növbəti açarla sınanır.",
+      providers: [{ value: "openweathermap", label: "OpenWeatherMap", limit: 1000 }]
+    }
+  };
+
+  var STATUS = {
+    active: "Aktiv",
+    exhausted: "Bitib",
+    quota_reached: "Limit dolub",
+    unconfigured: "Qurulmayıb"
+  };
+
+  var state = { tab: "ai_api", data: null };
+
+  function $(id) { return document.getElementById(id); }
+
+  var noteTimer = 0;
+  function note(text, kind) {
+    var node = $("ak-note");
+    if (!node) return;
+    node.textContent = text || "";
+    node.className = "ak-note" + (kind ? " " + kind : "");
+    window.clearTimeout(noteTimer);
+    if (text) {
+      noteTimer = window.setTimeout(function () {
+        node.textContent = "";
+        node.className = "ak-note";
+      }, 6000);
+    }
+  }
+
+  function headers() {
+    var h = { "Content-Type": "application/json" };
+    try {
+      var key = localStorage.getItem("dumy_api_key");
+      if (key) h["X-API-Key"] = key;
+    } catch (e) { /* private mode */ }
+    return h;
+  }
+
+  function api(path, options) {
+    options = options || {};
+    return fetch(path, {
+      method: options.method || "GET",
+      headers: headers(),
+      body: options.body === undefined ? undefined : JSON.stringify(options.body)
+    }).then(function (res) {
+      return res.text().then(function (raw) {
+        var data = {};
+        if (raw) { try { data = JSON.parse(raw); } catch (e) { data = {}; } }
+        if (!res.ok) {
+          var err = new Error((data && data.error) || ("HTTP " + res.status));
+          err.status = res.status;
+          throw err;
+        }
+        return data;
+      });
+    }).catch(function (err) {
+      if (err && err.status) throw err;
+      throw new Error("DUMY serverinə qoşulmaq alınmadı.");
+    });
+  }
+
+  function renderProviders() {
+    var select = $("ak-provider");
+    if (!select) return;
+    var providers = SERVICE[state.tab].providers;
+    select.innerHTML = "";
+    providers.forEach(function (p) {
+      var option = document.createElement("option");
+      option.value = p.value;
+      option.textContent = p.label;
+      select.appendChild(option);
+    });
+    $("ak-limit").value = providers[0].limit;
+  }
+
+  function actionButton(label, className, action, index, disabled) {
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = className;
+    button.textContent = label;
+    button.disabled = !!disabled;
+    button.addEventListener("click", function () { act(action, index); });
+    return button;
+  }
+
+  function buildRow(entry, index) {
+    var tr = document.createElement("tr");
+    if (entry.active) tr.className = "ak-active";
+
+    var providerCell = document.createElement("td");
+    providerCell.textContent = entry.provider || "—";
+
+    var keyCell = document.createElement("td");
+    var masked = document.createElement("span");
+    masked.className = "ak-key";
+    masked.textContent = entry.key || "—";
+    keyCell.appendChild(masked);
+
+    var usageCell = document.createElement("td");
+    usageCell.className = "ak-usage";
+    var line = document.createElement("small");
+    line.textContent = entry.limit > 0
+      ? entry.request_count + " / " + entry.limit
+      : entry.request_count + " / ∞";
+    var bar = document.createElement("div");
+    bar.className = "ak-bar";
+    var fill = document.createElement("i");
+    if (entry.limit > 0) {
+      var pct = Math.min(100, (entry.request_count / entry.limit) * 100);
+      fill.style.width = pct + "%";
+      if (pct >= 100) fill.className = "full";
+      else if (pct >= 80) fill.className = "hot";
+    } else {
+      fill.style.width = "6%";
+    }
+    bar.appendChild(fill);
+    usageCell.appendChild(line);
+    usageCell.appendChild(bar);
+
+    var statusCell = document.createElement("td");
+    var badge = document.createElement("span");
+    badge.className = "ak-status " + (entry.status || "active");
+    badge.textContent = STATUS[entry.status] || entry.status || "";
+    statusCell.appendChild(badge);
+
+    var actionsCell = document.createElement("td");
+    var actions = document.createElement("div");
+    actions.className = "ak-actions";
+    actions.appendChild(actionButton("İstifadə et", "btn ak-tiny", "activate", index,
+                                    entry.active || !entry.usable));
+    actions.appendChild(actionButton("Sil", "btn danger ak-tiny", "delete", index, false));
+    actionsCell.appendChild(actions);
+
+    tr.appendChild(providerCell);
+    tr.appendChild(keyCell);
+    tr.appendChild(usageCell);
+    tr.appendChild(statusCell);
+    tr.appendChild(actionsCell);
+    return tr;
+  }
+
+  function renderRows() {
+    var body = $("ak-rows");
+    if (!body) return;
+    body.innerHTML = "";
+
+    var bucket = state.data && state.data[state.tab];
+    var keys = bucket && bucket.keys ? bucket.keys : [];
+    if (!keys.length) {
+      var tr = document.createElement("tr");
+      var td = document.createElement("td");
+      td.colSpan = 5;
+      td.className = "ak-empty";
+      td.textContent = "Hələ açar yoxdur — aşağıdan əlavə edin.";
+      tr.appendChild(td);
+      body.appendChild(tr);
+      return;
+    }
+    keys.forEach(function (entry, index) {
+      body.appendChild(buildRow(entry, index));
+    });
+  }
+
+  function render() {
+    var tabs = document.querySelectorAll("[data-ak-tab]");
+    for (var i = 0; i < tabs.length; i++) {
+      var on = tabs[i].getAttribute("data-ak-tab") === state.tab;
+      tabs[i].setAttribute("aria-selected", on ? "true" : "false");
+    }
+    var hint = $("ak-hint");
+    if (hint) hint.textContent = SERVICE[state.tab].hint;
+    renderRows();
+  }
+
+  function load() {
+    return api("/api/keys").then(function (data) {
+      state.data = data;
+      renderRows();
+    }, function (err) {
+      note(err.message, "err");
+      renderRows();
+    });
+  }
+
+  function act(action, index) {
+    if (action === "delete") {
+      if (!window.confirm("Bu açar silinsin?")) return;
+      api("/api/keys", { method: "DELETE", body: { service: state.tab, index: index } })
+        .then(function () { note("Açar silindi.", "ok"); return load(); })
+        .catch(function (err) { note(err.message, "err"); });
+      return;
+    }
+    api("/api/keys/activate", { method: "POST", body: { service: state.tab, index: index } })
+      .then(function () { note("Aktiv açar dəyişdirildi.", "ok"); return load(); })
+      .catch(function (err) { note(err.message, "err"); });
+  }
+
+  function openPanel() {
+    var dialog = $("apikeys-dialog");
+    if (!dialog) return;
+    if (document.body.classList.contains("sb-open")) {
+      document.body.classList.remove("sb-open");
+    }
+    renderProviders();
+    render();
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "open");
+    load();
+  }
+
+  function bind() {
+    var opener = $("open-apikeys");
+    if (opener) opener.addEventListener("click", openPanel);
+
+    var closer = $("apikeys-close");
+    if (closer) closer.addEventListener("click", function () {
+      var dialog = $("apikeys-dialog");
+      if (dialog && dialog.open) dialog.close();
+    });
+
+    var tabs = document.querySelectorAll("[data-ak-tab]");
+    for (var i = 0; i < tabs.length; i++) {
+      tabs[i].addEventListener("click", function () {
+        state.tab = this.getAttribute("data-ak-tab");
+        renderProviders();
+        render();
+      });
+    }
+
+    var providerSelect = $("ak-provider");
+    if (providerSelect) providerSelect.addEventListener("change", function () {
+      var list = SERVICE[state.tab].providers;
+      for (var j = 0; j < list.length; j++) {
+        if (list[j].value === providerSelect.value) $("ak-limit").value = list[j].limit;
+      }
+    });
+
+    var form = $("ak-form");
+    if (form) form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var provider = $("ak-provider").value;
+      var key = $("ak-key-input").value.trim();
+      var limit = parseInt($("ak-limit").value, 10);
+      if (!key) { note("API açarını yazın.", "err"); return; }
+      if (isNaN(limit) || limit < 0) {
+        note("Limit mənfi olmayan tam ədəd olmalıdır.", "err");
+        return;
+      }
+      api("/api/keys", {
+        method: "POST",
+        body: { service: state.tab, provider: provider, key: key, limit: limit }
+      }).then(function () {
+        $("ak-key-input").value = "";
+        note("Açar əlavə olundu.", "ok");
+        return load();
+      }).catch(function (err) { note(err.message, "err"); });
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bind);
+  } else {
+    bind();
   }
 })();
 </script>

@@ -212,7 +212,7 @@ std::string OllamaClient::strip_thinking(const std::string& s) {
             out.erase(open, close + close_len - open);
         }
     };
-    strip_pair("<think>", "</tool_call>", 7, 10);
+    strip_pair("<think>", "</think>", 7, 8);
     strip_pair("<thinking>", "</thinking>", 10, 11);
     return trim(out);
 }
@@ -233,7 +233,7 @@ std::string OllamaClient::chat(const std::string& model,
     RequestSpec spec;
     spec.url = base_url_ + "/api/chat";
     spec.body = body.dump();
-    spec.timeout_sec = timeout_;
+    spec.timeout_sec = opts.timeout_sec > 0 ? opts.timeout_sec : timeout_;
     spec.streaming = false;
 
     const auto noop = [](const std::string&) {};
@@ -275,7 +275,7 @@ std::string OllamaClient::chat_stream(const std::string& model,
     RequestSpec spec;
     spec.url = base_url_ + "/api/chat";
     spec.body = body.dump();
-    spec.timeout_sec = timeout_;
+    spec.timeout_sec = opts.timeout_sec > 0 ? opts.timeout_sec : timeout_;
     spec.streaming = true;
 
     std::string full;
