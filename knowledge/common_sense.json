@@ -165,10 +165,8 @@
       "id": "sheep_flocking",
       "keywords": [
         "qoyun",
-        "suru",
         "hereket",
-        "davranis",
-        "hereke"
+        "davranis"
       ],
       "answer": "Qoyunlar sürü heyvanlarıdır və təhlükə hiss etdikdə bir-birinə sıxışaraq sürü halında hərəkət edir. Bu, yırtıcılardan qorunma instinktidir.",
       "tags": [
@@ -186,6 +184,17 @@
         "bal",
         "petek",
         "danis"
+      ],
+      "combos": [
+        [
+          "ariciliq",
+          "arilar"
+        ],
+        [
+          "reqs",
+          "danis",
+          "bildir"
+        ]
       ],
       "answer": "Arılar yem mənbəyinin yerini \"rəqs\" (səkkiz rəqsi) ilə bildirir; rəqsin istiqaməti və müddəti mənbəyə qədər məsafəni göstərir.",
       "tags": [
@@ -312,6 +321,18 @@
         "reng",
         "karotin"
       ],
+      "combos": [
+        [
+          "inek",
+          "iney",
+          "sagim"
+        ],
+        [
+          "sari",
+          "karotin",
+          "sariumtil"
+        ]
+      ],
       "answer": "İnək südünün sarımtıl çaları karotin pigmentindən irəli gəlir; bu, yemlə (xüsusən yaşıl otla) bağlıdır.",
       "tags": [
         "süd",
@@ -328,6 +349,17 @@
         "piy",
         "cins"
       ],
+      "combos": [
+        [
+          "qoyun",
+          "quzu"
+        ],
+        [
+          "quyruq",
+          "yagli",
+          "piyli"
+        ]
+      ],
       "answer": "Bəzi qoyun cinslərində quyruqda yağ yığılır; bu, enerji ehtiyatı saxlayan adaptasiyadır.",
       "tags": [
         "qoyun",
@@ -343,6 +375,18 @@
         "yatma",
         "yuxu",
         "istirahet"
+      ],
+      "combos": [
+        [
+          "inek",
+          "qaramal",
+          "dana"
+        ],
+        [
+          "yuxu",
+          "yatma",
+          "istirahet"
+        ]
       ],
       "answer": "İnəklər gündə təxminən 10-12 saat uzanır, lakin dərin yuxu qısa olur. Rahat yatma yeri süd veriminə müsbət təsir edir.",
       "tags": [
@@ -376,6 +420,17 @@
         "ayaq",
         "yatma"
       ],
+      "combos": [
+        [
+          "atlar",
+          "atlarin"
+        ],
+        [
+          "yuxu",
+          "ayaq",
+          "yatma"
+        ]
+      ],
       "answer": "Atlar dayanaraq yuxuya gedə bilir, lakin dərin yuxu üçün uzanırlar. Ayaqda yuxu onları təhlükəyə hazır saxlayır.",
       "tags": [
         "at",
@@ -406,7 +461,18 @@
         "ari",
         "ana",
         "kralice",
-        "peteк"
+        "petek"
+      ],
+      "combos": [
+        [
+          "ariciliq",
+          "arilar",
+          "ailes"
+        ],
+        [
+          "kralice",
+          "kralic"
+        ]
       ],
       "answer": "Arı ailəsində yumurta qoyan tək ana arıdır; işçi arılar onun feromonları ilə ailəni birləşdirir.",
       "tags": [
@@ -424,6 +490,21 @@
         "sis",
         "qaz",
         "timpaniya"
+      ],
+      "combos": [
+        [
+          "inek",
+          "iney",
+          "qaramal",
+          "dana"
+        ],
+        [
+          "qarin",
+          "qarni",
+          "qarn",
+          "sis",
+          "timpaniya"
+        ]
       ],
       "answer": "İnəklərdə qarın şişkinliyi adətən işgəncədə qaz yığılması ilə əlaqədardır. Bu, təcili baytar müdaxiləsi tələb edə bilən vəziyyətdir.",
       "tags": [
@@ -456,6 +537,19 @@
         "dırmaş",
         "qaya",
         "balans"
+      ],
+      "combos": [
+        [
+          "keci",
+          "kecil",
+          "kec"
+        ],
+        [
+          "dirmas",
+          "dirma",
+          "qaya",
+          "balans"
+        ]
       ],
       "answer": "Keçilər yaxşı dırmaşan heyvanlardır; bu, onların təbiətdə qida tapmaq və yırtıcıdan qorunma davranışıdır.",
       "tags": [

@@ -261,7 +261,36 @@ inline bool has_repetition_loop(const std::string& text) {
     // times is indistinguishable from a loop (tests/gate_diagnosis.md).
     const std::string t = trim(strip_citation_tags(text));
     if (t.size() < 80) return false;
-    const auto words = az_words(t);
+    // Markdown structure is not prose: a bulleted/numbered answer repeats its
+    // lead-in phrasing by design ("... azaldır", "... təmin edir"), and the
+    // 4-gram rule read that as a generation loop and rejected whole drafts.
+    // Structure lines (- , * , + , # , | and "1. ") are dropped before counting,
+    // so only continuous prose is checked.
+    std::string prose;
+    size_t ls = 0;
+    while (ls <= t.size()) {
+        size_t le = t.find('\n', ls);
+        if (le == std::string::npos) le = t.size();
+        const std::string line = trim(t.substr(ls, le - ls));
+        bool structure = line.rfind("- ", 0) == 0 || line.rfind("* ", 0) == 0 ||
+                         line.rfind("+ ", 0) == 0 || line.rfind("#", 0) == 0 ||
+                         line.rfind("|", 0) == 0;
+        size_t digits = 0;
+        while (digits < line.size() && line[digits] >= '0' && line[digits] <= '9') ++digits;
+        if (digits > 0 && digits + 1 < line.size() && line[digits] == '.' &&
+            line[digits + 1] == ' ')
+            structure = true;
+        if (!structure && !line.empty()) {
+            prose += line;
+            prose += '\n';
+        }
+        if (le == t.size()) break;
+        ls = le + 1;
+    }
+    // A structure-only answer has no prose in which a loop could hide.
+    if (prose.size() < 80) return false;
+    const std::string body = prose;
+    const auto words = az_words(body);
     if (words.size() < 12) return false;
 
     // The same 4-word sequence three times is a generation loop.
@@ -269,7 +298,9 @@ inline bool has_repetition_loop(const std::string& text) {
     for (size_t i = 0; i + 4 <= words.size(); ++i) {
         const std::string g = words[i] + " " + words[i + 1] + " " + words[i + 2] + " " +
                               words[i + 3];
-        if (++grams[g] >= 3) return true;
+        // 4 repeats: three is ordinary for structured lists ("... təmin edir",
+        // repeated lead-ins) and made the gate reject good drafts.
+        if (++grams[g] >= 4) return true;
     }
     // One long word repeated many times. Domain terms are excluded: a dairy
     // answer repeats "qaramal", "saqim" or "yem" in every paragraph, and the
@@ -282,9 +313,9 @@ inline bool has_repetition_loop(const std::string& text) {
     // loop, and the earlier threshold forced needless strict retries.
     std::map<std::string, int> sentences;
     std::string cur;
-    for (size_t i = 0; i < t.size(); ++i) {
-        cur.push_back(t[i]);
-        if (t[i] == '.' || t[i] == '!' || t[i] == '?') {
+    for (size_t i = 0; i < body.size(); ++i) {
+        cur.push_back(body[i]);
+        if (body[i] == '.' || body[i] == '!' || body[i] == '?') {
             const std::string s = trim(az_fold(cur));
             if (s.size() >= 30 && ++sentences[s] >= 3) return true;
             cur.clear();
@@ -347,7 +378,17 @@ inline bool has_agri_keyword(const std::string& text) {
         "silos", "saman", "taxil", "bugda", "arpa", "qargidali", "cugundur",
         "yonca", "kartof", "pomidor", "xiyar", "badimcan", "lahanay",
         "pambiq", "uzum", "bag", "meyve", "terevez", "agac", "ting", "toxum",
-        "torpaq", "gubre", "suvarma", "ekin", "beceri", "seleksiya", "sort",
+        "torpaq", "torpag", "torpaql", "gubre", "gubrel", "suvarma", "suvarm",
+        "ekin", "beceri", "seleksiya", "sort",
+        // Plant / soil / plant-nutrition vocabulary. A stem ending in "-q"
+        // also needs its "-g" form: az_fold maps ğ->g, so "torpağın" folds
+        // to "torpagin" and only the "torpag" stem can see it.
+        "toyug", "aricilig", "otlag", "pambig",
+        "bitki", "bitkil", "bitkin", "yarpag", "yarpaq", "kok", "kokde",
+        "kokun", "kokl", "govde", "cicek", "cicekl",
+        "fosfor", "azot", "kalium", "kalsium", "maqnezium", "mikroelement",
+        "makroelement", "fotosintez", "xloroz", "xlorofil", "humus",
+        "nemlik", "quragliq", "iqlim", "temperatur", "ph",
         // Short stems (3 letters) match the whole token only, so the plural
         // forms a real question uses are listed too: arılar, quşlar, atlar.
         "at", "atlar", "qus", "qusl", "aril", "coban", "traktor",
@@ -762,7 +803,41 @@ inline bool is_declarative_statement(const std::string& q) {
 }
 
 inline bool is_statement_input(const std::string& q) {
-    return is_title_statement(q) || is_declarative_statement(q);
+    // A real question with a question mark is never a statement.
+    if (q.find('?') != std::string::npos) return false;
+
+    const std::string f = az_fold(q);
+
+    // Command verbs: user is asking us to DO something, not asserting a fact.
+    static const char* COMMAND_VERBS[] = {
+        "denen", "de", "deyin", "yaz", "yazin", "yazmaq",
+        "goster", "gosterin", "gosterebilersen",
+        "izah et", "izah edin",
+        "deyebilersen", "deyebilersiniz", "deyebilermisiniz",
+        "zehemet olmasa", "zehmet olmasa",
+        "lutfen", "soyle", "soyleyin", "soyleyebilersen",
+        "cavab ver", "cavablandir",
+        "mualice yollarini", "adini de", "adlarini de",
+        "melumat ver", "melumatlandir"
+    };
+    for (const char* v : COMMAND_VERBS) {
+        if (f.find(v) != std::string::npos) return false;
+    }
+
+    // Short topic fragments like "arilar haqqinda" are statements of topic,
+    // not questions — but only if they contain no command verb (above).
+    // The real fact-check path is only for "X: Y" style input, e.g.
+    // "Title: statement" (colon within the first 50 characters).
+    const size_t colon = q.find(':');
+    if (colon != std::string::npos && colon < 50) {
+        // Only treat as a statement if the part BEFORE the colon is short
+        // (a label) and the part AFTER the colon is a full clause.
+        const std::string before = trim(q.substr(0, colon));
+        const std::string after = trim(q.substr(colon + 1));
+        if (before.size() <= 40 && after.size() >= 20) return true;
+    }
+
+    return false;
 }
 
 // Grammar topics: the agriculture PDFs are not a source for them, and a 4B

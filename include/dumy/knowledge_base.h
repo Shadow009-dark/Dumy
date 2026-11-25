@@ -116,9 +116,69 @@ public:
             std::size_t kw = 0;
             for (const auto& k : e.keywords)
                 if (has_stem5(stems, k)) ++kw;
-            if (e.combos.empty() && kw < 2) continue;   // F6.3: no single-word matches
+            if (e.combos.empty() && kw < 3) continue;   // F6.3: 3+ keyword hits only
             score += kw;
             if (score > best_score) { best_score = score; best = &e; }
+        }
+        return best;
+    }
+
+    // One scoring pass over BOTH kinds of entry, so a combo can no longer
+    // pre-empt a keyword entry with a clearly better match (an incubation
+    // question used to be answered by the chick-colour entry because
+    // "nə etməli" completed its second combo part).
+    //   * an entry WITH combos must match every part, else score 0 - keyword
+    //     hits never rescue it;
+    //   * an entry WITHOUT combos needs kw >= 3 and scores 10 per hit;
+    //   * ties: more keyword hits, then a combo made of topic words rather
+    //     than question cues, then more combo parts, then the id.
+    const KnowledgeEntry* match_best(const std::string& question) {
+        refresh();
+        const std::vector<std::string> stems = tokenize(question);
+        const KnowledgeEntry* best = nullptr;
+        std::size_t best_score = 0, best_kw = 0, best_parts = 0;
+        bool best_cue = false;
+        for (const auto& e : entries_) {
+            if (!e.safe) continue;
+            std::size_t kw = 0;
+            for (const auto& k : e.keywords)
+                if (has_stem5(stems, k)) ++kw;
+            std::size_t score = 0, parts = 0;
+            bool cue = false;
+            if (!e.combos.empty()) {
+                bool all = true;
+                for (const auto& group : e.combos) {
+                    bool hit = false;
+                    for (const auto& g : group) {
+                        if (has_stem(stems, g)) {
+                            hit = true;
+                            if (is_cue_part(g)) cue = true;
+                        }
+                    }
+                    if (!hit) { all = false; break; }
+                    ++parts;
+                }
+                if (!all) continue;          // keyword count cannot rescue a combo
+                score = 10 * parts;
+            } else {
+                if (kw < 3) continue;
+                score = 10 * kw;
+            }
+            if (best == nullptr) {
+                best = &e; best_score = score; best_kw = kw;
+                best_parts = parts; best_cue = cue;
+                continue;
+            }
+            bool better = false;
+            if (score != best_score) better = score > best_score;
+            else if (kw != best_kw) better = kw > best_kw;
+            else if (cue != best_cue) better = best_cue && !cue;
+            else if (parts != best_parts) better = parts > best_parts;
+            else better = e.id < best->id;
+            if (better) {
+                best = &e; best_score = score; best_kw = kw;
+                best_parts = parts; best_cue = cue;
+            }
         }
         return best;
     }
@@ -182,6 +242,16 @@ private:
         const std::string want = w.front().substr(0, 5);
         for (const auto& st : stems)
             if (st.size() >= 5 && st.compare(0, 5, want) == 0) return true;
+        return false;
+    }
+
+    // A combo part that only asks the question ("nə etməli") must not decide
+    // which curated entry answers it.
+    static bool is_cue_part(const std::string& part) {
+        static const char* CUE[] = {"ne et", "ne ed", "etmeli", "edim", "bilerem",
+                                    "nece", "hansi", "nedir", "neden", "lazim"};
+        for (const char* c : CUE)
+            if (part == c) return true;
         return false;
     }
 

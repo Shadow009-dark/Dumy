@@ -20,6 +20,7 @@
 #include "dumy/session_manager.h"
 #include "dumy/knowledge_base.h"
 #include "dumy/vector_store.h"
+#include "dumy/weather_tool.h"
 #include "dumy/web_search.h"
 
 namespace dumy {
@@ -98,6 +99,10 @@ public:
     const std::string& helper_model() const { return helper_model_; }
     const std::string& embedding_model() const { return embedding_model_; }
 
+    // Attaches config/api_keys.json to the weather tool (HttpServer calls this
+    // after the key store is loaded). Without it the tool answers "no_key".
+    void set_key_manager(KeyManager* keys) { weather_.set_key_manager(keys); }
+
     // Produces the final answer. `on_delta` (optional) receives draft text
     // fragments for streaming, `on_status` (optional) receives phase names;
     // the returned AnswerResult is authoritative.
@@ -150,6 +155,7 @@ private:
     std::map<std::string, DocSpeciesLabel> doc_species_;
 
     const Config& cfg_;
+    mutable WeatherTool weather_;   // internal weather tool (no public route)
     OllamaClient& ollama_;
     VectorStorePtr store_;
     Bm25Index& bm25_;

@@ -395,6 +395,7 @@ RagPipeline::RagPipeline(const Config& cfg, OllamaClient& ollama, VectorStorePtr
                          Reranker& reranker, SessionManager& sessions,
                          ConversationStore* conversations)
     : cfg_(cfg),
+      weather_(cfg),
       conversations_(conversations),
       ollama_(ollama),
       store_(std::move(store)),
@@ -857,11 +858,14 @@ AnswerResult RagPipeline::answer(const std::string& question,
 
 namespace {
 // E3(a): faithful extractive fallback. Sentence-level stem overlap on folded
-// tokens (first 5 letters, az_stems5 in az_quality.h), plus a digit when the
+// tokens (inflection-aware words, see relevance_key_terms), plus a digit when the
 // question asks for a number.
 bool extract_best_sentence(const std::string& question, const std::vector<Chunk>& chunks,
                            std::string* out) {
-    const std::vector<std::string> qs = az_stems5(question);
+    // Inflection-aware question words (see build_excerpt_bullets): 5-char stems
+    // matched unrelated sentences such as "süni yolla alınması".
+    const std::vector<std::string> qs = relevance_key_terms(question);
+    const size_t need = qs.size() >= 8 ? 3 : 2;
     if (qs.empty()) return false;
     const std::string qf = az_fold(question);
     const bool wants_number = qf.find("nece") != std::string::npos ||
@@ -891,12 +895,16 @@ bool extract_best_sentence(const std::string& question, const std::vector<Chunk>
                 if (!digit) continue;
             }
             size_t score = 0;
-            for (const auto& st : qs)
-                if (az_fold(sent).find(st) != std::string::npos) ++score;
+            const std::vector<std::string> sent_words = az_words(sent);
+            for (const auto& qw : qs) {
+                for (const auto& sw : sent_words) {
+                    if (az_words_match(qw, sw)) { ++score; break; }
+                }
+            }
             if (score > best_score) { best_score = score; best = sent; }
         }
     }
-    if (best.empty() || best_score < 2) return false;
+    if (best.empty() || best_score < need) return false;
     *out = best;
     return true;
 }
@@ -1074,6 +1082,26 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
         return res;
     }
 
+    // --- 0c. Weather tool (internal function call, no public endpoint) ------
+    // Must stay BEFORE the bare-sentence fast path: "bakida hava necedir"
+    // would otherwise be answered as a spelling correction.
+    const WeatherResult weather = weather_.resolve(q);
+    if (weather.requested) {
+        if (!weather.ok) {
+            log_info("weather tool: " + (weather.error.empty() ? "failed" : weather.error));
+            res.qtype = "weather";
+            res.no_sources = true;
+            res.from_own_knowledge = true;
+            res.answer = weather.message.empty() ? WeatherTool::no_key_message()
+                                                 : weather.message;
+            if (on_delta) on_delta(res.answer);
+            return res;
+        }
+        log_info("weather tool: " + weather.city +
+                 (weather.forecast ? " forecast" : " current") +
+                 (weather.cache_hit ? " (cache)" : ""));
+    }
+
     // --- 0d. Typed sentence without Azerbaijani letters ---------------------
     // "men sabah mekteve gedecem" is a spelling correction request, not a
     // knowledge question. The local dictionary restores the letters, so this
@@ -1238,8 +1266,19 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
                 const std::string v2 = fc_verdict(out2);
                 log_info("fact_check agreement: v1=" + v1 + " v2=" + v2);
                 if (v1 != v2) {
-                    out = "Dəqiq bilmirəm. İki yoxlama fərqli nəticə verdi, ona "
-                          "görə bu iddianı təsdiqləyə bilmirəm.";
+                    // If the first check said "Doğrudur" and the draft has a real PDF
+                    // citation, the adversarial pass is likely over-strict. Trust the
+                    // neutral verdict.
+                    if (v1 == "Doğrudur." && out.find("[Mənbə:") != std::string::npos) {
+                        log_info("fact_check: disagreement, but draft has PDF citation - keeping v1");
+                        // out stays as v1's answer; do not overwrite.
+                    } else if (v2 == "Doğrudur." && out2.find("[Mənbə:") != std::string::npos) {
+                        log_info("fact_check: disagreement, but draft has PDF citation - keeping v2");
+                        out = out2;
+                    } else {
+                        out = "Dəqiq bilmirəm. İki yoxlama fərqli nəticə verdi, ona "
+                              "görə bu iddianı təsdiqləyə bilmirəm.";
+                    }
                 }
             } else {
                 log_warn("fact_check refute pass failed: " + aerr);
@@ -1278,8 +1317,12 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     // refusal and simple facts/definitions get one short answer that must pass
     // the word-validity, subject and domain-drift checks.
     // Tier 2 combo entries are specific enough to answer before retrieval.
-    if (cfg_.knowledge_enabled) {
-        if (const KnowledgeEntry* ke = knowledge_.match_combo(q)) {
+    // The curated shortcut is for short, single-topic questions; a long or
+    // test-format question must be answered by the RAG pipeline instead.
+    const bool knowledge_shortcut_ok =
+        !is_multiple_choice(q) && meaningful_word_count(q) <= 10;
+    if (cfg_.knowledge_enabled && knowledge_shortcut_ok) {
+        if (const KnowledgeEntry* ke = knowledge_.match_best(q)) {
             res.answer = ke->answer;
             res.qtype = "knowledge";
             res.knowledge_ids.push_back(ke->id);
@@ -1290,7 +1333,7 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     }
     if (!has_agri_keyword(q)) {
         // F7.1(b): outside the books - curated knowledge before any model call.
-        if (cfg_.knowledge_enabled) {
+        if (cfg_.knowledge_enabled && knowledge_shortcut_ok) {
             if (const KnowledgeEntry* ke = knowledge_.match(q)) {
                 res.answer = ke->answer;
                 res.qtype = "knowledge";
@@ -1306,10 +1349,16 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
         res.general_answer = true;
         const bool grammar = is_grammar_topic(q);
         const bool procedure = is_procedure_request(q) || is_list_question(q);
-        if (grammar || procedure) {
+        // Topic-level refusal: history/sport/cinema/cooking are refused even
+        // when phrased as a plain request. This branch only runs when the
+        // question has no agronomy word, so "Pambıq əkininin tarixi nədir?"
+        // (which is_off_topic also flags via "tarix") is never affected.
+        const bool off_topic = is_off_topic(q);
+        if (off_topic || grammar || procedure) {
             res.answer = OUT_OF_SCOPE_MESSAGE;
             log_info(std::string("off-domain: ") +
-                     (grammar ? "grammar" : "procedure/list") +
+                     (off_topic ? "off-topic"
+                                : (grammar ? "grammar" : "procedure/list")) +
                      " -> honest refusal");
         } else {
             // Memory goes into the general answer prompt only: the PDF and
@@ -1517,7 +1566,10 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     // an agriculture book is not a source for a general-science definition.
     // Without a livestock/agronomy term in the question, answer from general
     // knowledge instead of citing the PDF.
-    if (is_general_knowledge_question(q) && !pdf_chunks.empty()) {
+    // has_agri_keyword is the single domain list: a question that names soil,
+    // a plant or a nutrient is in-domain even when phrased as "nədir?", so its
+    // relevant chunks must not be discarded ("Torpağın pH-ı nədir?").
+    if (is_general_knowledge_question(q) && !has_agri_keyword(q) && !pdf_chunks.empty()) {
         log_info("general-knowledge question: PDF context dropped (" +
                  std::to_string(pdf_chunks.size()) +
                  " chunks, no livestock/agronomy term)");
@@ -1705,7 +1757,8 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     }
 
     // --- 4b. Tier 2 before generation, only when no chunk passed the gate ---
-    if (cfg_.knowledge_enabled && (selected.empty() || pdf_relevance_failed)) {
+    if (cfg_.knowledge_enabled && knowledge_shortcut_ok &&
+        (selected.empty() || pdf_relevance_failed)) {
         if (const KnowledgeEntry* ke = knowledge_.match(q)) {
             res.answer = ke->answer;
             res.qtype = "knowledge";
@@ -1775,8 +1828,29 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
                                  ? static_cast<size_t>(cfg_.num_ctx) - fixed
                                  : size_t(256);
         const size_t before_trim = context_chunks.size();
+        // Trim by source diversity instead of blindly from the end: while the
+        // limit is exceeded, drop the lowest-ranked chunk whose source is still
+        // represented in the context, so one book's passage cannot crowd out
+        // another book's (an alfalfa page must not displace cotton history).
+        // The top-ranked chunk (index 0) is never removed.
+        auto source_count = [&context_chunks](const std::string& src) {
+            return static_cast<size_t>(std::count_if(
+                context_chunks.begin(), context_chunks.end(),
+                [&src](const Chunk& c) { return c.source == src; }));
+        };
         while (context_chunks.size() > 1 && total_tokens(context_chunks, cpt) > limit) {
-            context_chunks.pop_back();  // lowest-ranked chunk first
+            size_t drop = context_chunks.size();
+            for (size_t i = context_chunks.size(); i-- > 1;) {
+                if (source_count(context_chunks[i].source) > 1) {
+                    drop = i;
+                    break;
+                }
+            }
+            if (drop < context_chunks.size()) {
+                context_chunks.erase(context_chunks.begin() + static_cast<long>(drop));
+            } else {
+                context_chunks.pop_back();  // every source unique: lowest-ranked
+            }
         }
         if (context_chunks.size() != before_trim) {
             log_info("context trimmed to fit num_ctx: " +
@@ -1807,9 +1881,13 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     };
     auto build_messages = [&](const std::vector<Chunk>& ctx) {
         std::vector<ChatMessage> msgs;
-        msgs.push_back({"system", SYSTEM_PROMPT});
+        // SYSTEM_PROMPT itself is untouched; the weather rule is appended for
+        // this one request only, so rule 1 ("answer from context") does not
+        // fight the injected live data.
+        msgs.push_back({"system", std::string(SYSTEM_PROMPT) +
+                                    WeatherTool::system_suffix(weather)});
         for (const auto& m : sessions_.history(session_id)) msgs.push_back(m);
-        msgs.push_back({"user", build_user_msg(ctx)});
+        msgs.push_back({"user", WeatherTool::inject_weather(build_user_msg(ctx), weather)});
         return msgs;
     };
 
@@ -1821,6 +1899,9 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
         try { draft_temp = std::stod(tp); } catch (...) {}
     }
     ChatOptions draft_opts = cfg_.chat_options(cfg_.num_predict_draft, draft_temp);
+    // A wedged Ollama runner must fail the draft, not hang the UI forever.
+    // 120 s is >2x the slowest draft measured on this laptop (~47 s).
+    draft_opts.timeout_sec = 120;
     StageTimer t_draft;
     std::string derr;
     std::string draft;
@@ -1865,7 +1946,7 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
         const long long room =
             static_cast<long long>(cfg_.num_ctx) - draft_timing.prompt_tokens - 150;
         retry_opts.num_predict = static_cast<int>(
-            std::max<long long>(300, std::min<long long>(850, room)));
+            std::max<long long>(300, std::min<long long>(cfg_.num_predict_draft, room)));
         StageTimer t_regen;
         ChatTiming regen_timing;
         // Not streamed: the first (truncated) attempt is already on screen and
@@ -2015,7 +2096,8 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
                 // content; a hallucinated/off-topic rewrite is discarded.
                 const double sim = word_jaccard(draft, fixed);
                 const bool draft_thin = trim(draft).size() < 120;
-                if (sim >= 0.25 || draft_thin) {
+                // A truncated retry must never replace a complete draft.
+                if ((sim >= 0.25 || draft_thin) && fix_timing.done_reason != "length") {
                     final_answer = fixed;
                     res.used_self_check = true;
                     log_info("self_check retry accepted (similarity=" +
@@ -2234,14 +2316,22 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
         if (retry_mode == StrictRetryMode::WithContext) {
             retry = ollama_.chat(
                 chat_model_, {{"user", build_strict_context_message(retry_ctx, q)}},
-                cfg_.chat_options(std::min(cfg_.num_predict_draft, 400), 0.0), &serr,
+                cfg_.chat_options(qtype == QuestionType::BroadTopic
+                                      ? std::min(cfg_.num_predict_draft, 800)
+                                      : std::min(cfg_.num_predict_draft, 400),
+                                  0.0),
+                &serr,
                 &stiming);
             log_info("quality gate: strict retry with " +
                      std::to_string(retry_ctx.size()) + " context chunk(s)");
         } else if (retry_mode == StrictRetryMode::WithoutContext) {
             retry = ollama_.chat(
                 chat_model_, {{"user", build_strict_answer_message(q)}},
-                cfg_.chat_options(std::min(cfg_.num_predict_draft, 400), 0.0), &serr,
+                cfg_.chat_options(qtype == QuestionType::BroadTopic
+                                      ? std::min(cfg_.num_predict_draft, 800)
+                                      : std::min(cfg_.num_predict_draft, 400),
+                                  0.0),
+                &serr,
                 &stiming);
             log_info("quality gate: strict retry without context (no chunks survived)");
         } else {
@@ -2301,7 +2391,8 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
                                           {"chars", ex.size()}, {"verdict", "accepted"}});
                 log_info("quality gate: extractive fallback used (" +
                          std::to_string(ex.size()) + " chars from a selected chunk)");
-            } else if (cfg_.knowledge_enabled && knowledge_.match(q)) {
+            } else if (cfg_.knowledge_enabled && knowledge_shortcut_ok &&
+                       knowledge_.match(q)) {
                 const KnowledgeEntry* ke = knowledge_.match(q);
                 final_answer = ke->answer;
                 res.knowledge_ids.push_back(ke->id);

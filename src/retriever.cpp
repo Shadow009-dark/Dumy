@@ -48,6 +48,38 @@ bool contains_any(const std::string& text, const std::vector<const char*>& words
     return false;
 }
 
+// Azerbaijani is agglutinative ("inəy-in", "inəklər-in", "arın-ın"), so an
+// animal stem matches a TOKEN PREFIX; only very short words match a whole
+// token. Without this, "torpağın pH göstəricisi ... əsas səbəbi" was routed as
+// a veterinary diagnosis.
+bool token_prefix(const std::vector<std::string>& toks, const char* stem) {
+    const std::string s = az_fold(stem);
+    for (const auto& t : toks)
+        if (t.size() >= s.size() && t.compare(0, s.size(), s) == 0) return true;
+    return false;
+}
+
+bool token_exact(const std::vector<std::string>& toks, const char* word) {
+    const std::string w = az_fold(word);
+    for (const auto& t : toks)
+        if (t == w) return true;
+    return false;
+}
+
+bool has_animal_context(const std::string& question) {
+    const std::vector<std::string> toks = az_words(question);
+    static const char* STEMS[] = {
+        "inek", "iney", "malqara", "qoyun", "keci", "dana", "buzov", "quzu",
+        "toyuq", "cuce", "camis", "donuz", "heyvan", "suru",
+    };
+    for (const char* s : STEMS)
+        if (token_prefix(toks, s)) return true;
+    static const char* WORDS[] = {"at", "mal", "ari", "qus", "baliq"};
+    for (const char* w : WORDS)
+        if (token_exact(toks, w)) return true;
+    return false;
+}
+
 }  // namespace
 
 Retriever::Retriever(const Config& cfg, const OllamaClient& ollama, VectorStorePtr store,
@@ -98,7 +130,9 @@ QuestionType Retriever::analyze(const std::string& question) const {
         for (const auto& kw : cfg_.diagnosis_keywords) {
             diag_keywords.push_back(kw.c_str());
         }
-        if (contains_any(q, diag_keywords))
+        // An animal must be in the question AND a symptom/disease word must be
+        // there: soil chemistry (pH, fosfor, səbəb) is not a sick animal.
+        if (has_animal_context(q) && contains_any(q, diag_keywords))
             return QuestionType::Diagnosis;
     }
 
