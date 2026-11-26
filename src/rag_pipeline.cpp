@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <future>
 #include <set>
 #include <sstream>
@@ -404,7 +405,17 @@ RagPipeline::RagPipeline(const Config& cfg, OllamaClient& ollama, VectorStorePtr
       retriever_(retriever),
       reranker_(reranker),
       sessions_(sessions) {
-    knowledge_.load("knowledge/common_sense.json");
+    // Resolve against base_dir like every other data path, so the curated
+    // answers do not silently disappear when the exe is started elsewhere.
+    const std::string knowledge_path =
+        cfg_.resolve("knowledge/common_sense.json").u8string();
+    knowledge_.load(knowledge_path);
+    if (std::filesystem::exists(knowledge_path)) {
+        log_info("Bilik bazası: " + knowledge_path + " (" +
+                 std::to_string(knowledge_.size()) + " qeyd)");
+    } else {
+        log_warn("Bilik bazası tapılmadı: " + knowledge_path);
+    }
     embedding_model_ = cfg_.embedding_model;
 }
 
