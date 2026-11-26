@@ -448,6 +448,18 @@ int main() {
               "tokens: counts UTF-8 characters, not bytes");
     }
 
+    // 33) "proqram" is also an everyday word: "yem proqramı" is a feeding
+    //     programme and was refused as a code request. A generic noun now needs
+    //     a whole-word match AND a write/change verb nearby.
+    {
+        check(!is_code_request("Heyvanlarda yem proqramı necə olmalıdır?") &&
+                  !is_code_request("Peyvənd proqramı nə vaxt başlayır?") &&
+                  is_code_request("Mənə Python kodu yaz") &&
+                  is_code_request("proqram yaz") &&
+                  is_code_request("Mənə bir kod yaz"),
+              "code: generic \"proqram/kod\" needs a write verb, python still refused");
+    }
+
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
 }

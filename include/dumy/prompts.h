@@ -600,16 +600,43 @@ inline std::string build_summarize_user_message(const std::string& question,
 // Programming / code request -> polite Azerbaijani refusal (no LLM call).
 inline bool is_code_request(const std::string& question) {
     const std::string q = " " + to_lower_utf8(question) + " ";
+    // Unambiguous tokens: they do not occur inside agronomy words, so a
+    // substring match is safe. "proqramı"/"kod"/"kodu" are NOT here.
     static const char* kw[] = {
-        "kod yaz", "kodu yaz", "kodunu yaz", "kodla", "kod ", "kodu", "kodları",
-        "proqram yaz", "proqramı", "proqramlas", "skript", "script", "python",
-        "c++", "javascript", "java ", "html", "css", "sql", "php", "kod əvəz",
+        "kod yaz", "kodu yaz", "kodunu yaz", "kod əvəz", "kod nümun",
+        "kod örnək", "kodu nümun", "proqram yaz", "proqramı yaz",
+        "proqramlas", "kodlas", "skript", "script", "python",
+        "c++", "javascript", "java ", "html", "css", "sql", "php",
         "debug", "xətanı tap", "funksiya yaz", "alqoritm", "write code",
         "write a program", "coding", "compiler", "compile", "regex", "bash ",
-        "powershell", "kod nümun", "kod örnək", "kodu nümun",
+        "powershell",
     };
     for (const char* k : kw)
         if (q.find(k) != std::string::npos) return true;
+    // Generic nouns that are also everyday words ("yem proqramı" is a feeding
+    // programme, "barkodu" contains "kodu"): whole word only, and the request
+    // must also ask to write/change code. az_words() returns folded words
+    // (ə->e, ı->i, ş->s, ...), so these lists are folded too.
+    static const char* noun[] = {"kod", "kodu", "kodlar", "kodlari", "kodla",
+                                 "proqram", "proqrami", "proqramlar", "proqramlari"};
+    static const char* verb[] = {"yaz",  "yazin",   "yazmaq",   "yarat",
+                                 "hazirla", "hazirlayin", "duzelt", "duzeldin",
+                                 "qur",  "qurun",   "deyis",    "deyisin",
+                                 "duzelis"};
+    const std::vector<std::string> words = az_words(q);
+    for (size_t i = 0; i < words.size(); ++i) {
+        bool generic = false;
+        for (const char* n : noun)
+            if (words[i] == n) { generic = true; break; }
+        if (!generic) continue;
+        const size_t lo = i > 4 ? i - 4 : 0;
+        const size_t hi = std::min(words.size(), i + 5);
+        for (size_t j = lo; j < hi; ++j) {
+            if (j == i) continue;
+            for (const char* v : verb)
+                if (words[j] == v) return true;
+        }
+    }
     return false;
 }
 
