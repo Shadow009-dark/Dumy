@@ -850,8 +850,11 @@ inline bool is_statement_input(const std::string& q) {
     // a '?' is kept out by its question word, so "Torpağın pH-ı nədir" and
     // "İnək gündə neçə dəfə sağılmalıdır" still take the normal question path,
     // and a short topic fragment ("ümumiyyətlə xəstəliklər haqqında", 3 words)
-    // stays a fragment instead of becoming a claim to fact-check.
-    if (words.size() >= 5) {
+    // stays a fragment instead of becoming a claim to fact-check. 7 words is
+    // the same floor is_declarative_statement uses, and it keeps a short
+    // clinical complaint ("İnəyin südü azalıb, qızdırması var", 5 words) on
+    // the diagnosis path instead of answering it with a verdict.
+    if (words.size() >= 7) {
         static const char* QUESTION_WORDS[] = {
             "ne", "nece", "nedir", "niye", "hansi", "harada", "harda",
             "haradir", "kim", "neler", "nelerdir", "hansilari", "qeder",

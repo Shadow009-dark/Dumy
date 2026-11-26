@@ -487,13 +487,14 @@ int main() {
     {
         check(is_statement_input("Ayın məsafəsi: Ay Yerdən təxminən 384 000 kilometr uzaqdır.") &&
                   is_statement_input("Delfinlər: Delfinlər məməlidir.") &&
-                  is_statement_input("Dəvələr suyu humpunda yağ kimi saxlayırlar.") &&
+                  is_statement_input("Dəvələr suyu humpunda yağ kimi uzun müddət saxlayırlar.") &&
                   !is_statement_input("Torpağın pH-ı nədir?") &&
                   !is_statement_input("İnək gündə neçə dəfə sağılmalıdır") &&
                   !is_statement_input("Su hansı temperaturda qaynayır") &&
                   !is_statement_input("Bunu izah et") &&
                   !is_statement_input("arilar haqqinda") &&
-                  !is_statement_input("ümumiyyətlə xəstəliklər haqqında"),
+                  !is_statement_input("ümumiyyətlə xəstəliklər haqqında") &&
+                  !is_statement_input("İnəyin südü azalıb, qızdırması var"),
               "statement: titled/plain facts are statements, questions and commands are not");
     }
 
