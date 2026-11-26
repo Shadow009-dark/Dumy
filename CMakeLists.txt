@@ -139,7 +139,7 @@ else()
 endif()
 
 # ---------------- Unit tests (header-only, no server, no model) --------
-add_executable(dumy_unit_tests tests/test_quality_gate.cpp)
+add_executable(dumy_unit_tests tests/test_quality_gate.cpp src/vector_store.cpp)
 target_include_directories(dumy_unit_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(dumy_unit_tests PRIVATE ${DUMY_JSON_LIB})
 if(MSVC)

@@ -347,18 +347,54 @@ inline const char* NO_RELEVANT_CONTEXT_NOTE =
 // ---------------------------------------------------------------------------
 // Prompt builders
 // ---------------------------------------------------------------------------
+// Retrieved text is data, never instructions: the block that carries it is
+// delimited, and a chunk cannot forge the delimiter. Literal tag spellings
+// inside a chunk are defused (case-insensitive) so a PDF or web page cannot
+// close the block the system prompt promises to ignore.
+inline std::string neutralize_context_tags(const std::string& text) {
+    static const char* const kTags[2] = {"</context>", "<context>"};
+    static const char* const kReplace[2] = {"[/context]", "[context]"};
+    static const size_t kLen[2] = {10, 9};
+    std::string out;
+    out.reserve(text.size() + 8);
+    size_t i = 0;
+    while (i < text.size()) {
+        bool matched = false;
+        for (size_t t = 0; t < 2 && !matched; ++t) {
+            if (text.size() - i < kLen[t]) continue;
+            bool eq = true;
+            for (size_t k = 0; k < kLen[t] && eq; ++k) {
+                eq = std::tolower(static_cast<unsigned char>(text[i + k])) ==
+                     std::tolower(static_cast<unsigned char>(kTags[t][k]));
+            }
+            if (!eq) continue;
+            out += kReplace[t];
+            i += kLen[t];
+            matched = true;
+        }
+        if (matched) continue;
+        out.push_back(text[i]);
+        ++i;
+    }
+    return out;
+}
+
+// Exactly one <context> ... </context> around all retrieved chunks. Chunk
+// labels stay verbatim: the citation format the model must copy is unchanged.
 inline std::string build_context_block(const std::vector<Chunk>& chunks) {
-    std::string out = "MƏNBƏ KONTEKSTİ (hər faktı bu etiketlərlə istifadə et):\n";
+    std::string out = "<context>\n";
+    out += "MƏNBƏ KONTEKSTİ (hər faktı bu etiketlərlə istifadə et):\n";
     for (const auto& c : chunks) {
         out += "\n" + c.label() + "\n";
         if (c.kind == "web" && !c.title.empty()) {
-            out += "Səhifə başlığı: " + c.title + "\n";
+            out += "Səhifə başlığı: " + neutralize_context_tags(c.title) + "\n";
         }
         if (c.kind == "web" && !c.trusted) {
             out += "(təsdiqlənməmiş mənbə)\n";
         }
-        out += c.text + "\n";
+        out += neutralize_context_tags(c.text) + "\n";
     }
+    out += "</context>";
     return out;
 }
 
