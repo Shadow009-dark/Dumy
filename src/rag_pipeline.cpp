@@ -864,6 +864,15 @@ AnswerResult RagPipeline::answer(const std::string& question,
         r.answer = trim(kept);
     }
     if (trim(r.answer).empty()) r.answer = HONEST_FAILURE_MESSAGE;
+    // One de-duplicated source block at the very end, added AFTER
+    // clean_answer_text(): that pass removes a model-written "Mənbələr:"
+    // heading, which would otherwise leave the bullets without their header.
+    if (!r.no_sources) {
+        const std::string block = build_sources_block(r.used_chunks);
+        if (!block.empty() && r.answer.find(block) == std::string::npos) {
+            r.answer = r.answer.empty() ? block : r.answer + "\n\n" + block;
+        }
+    }
     return r;
 }
 
@@ -2533,6 +2542,16 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
                             {"total", t_total.ms()}};
         res.trace = t;
     }
+    // --- 8c. citations live in one block at the end, never mid-sentence ---
+    // The model tags each claimed fact ([Mənbə: ...]); that is how a cited
+    // chunk is identified (cited_chunks above), but reading those tags inside
+    // a sentence is unreadable, so they are stripped here and the de-duplicated
+    // list is printed once. sources_json() is untouched: the UI keeps its own
+    // collapsible list.
+    // The "Mənbələr:" block is appended in answer(), after clean_answer_text()
+    // has run: that post-processor treats a "Mənbələr:" heading as the start of
+    // a model-written source list and would eat it, leaving orphan bullets.
+    if (!res.no_sources) final_answer = strip_inline_citations(final_answer);
     res.answer = final_answer;
     const double ms_post = t_post.ms();
     const double ms_total = t_total.ms();

@@ -497,6 +497,39 @@ int main() {
               "statement: titled/plain facts are statements, questions and commands are not");
     }
 
+    // 36) Citation labels never reach the prose: the server strips every
+    //     inline [Mənbə: ...] fragment and prints one de-duplicated block at
+    //     the end instead, while sources_json() (the UI list) is untouched.
+    {
+        const std::string cited =
+            "Torpağın pH-ı 6,5 olur [Mənbə: Aqronomiya.pdf, səh. 12]. Bu normaldır "
+            "[Ümumi bilik]. Yem [Mənbə: Qaramal.pdf, səh. 4] gündə iki dəfə verilir.";
+        const std::string plain = strip_inline_citations(cited);
+        check(plain.find("[Mənbə") == std::string::npos &&
+                  plain.find("[Ümumi bilik]") == std::string::npos &&
+                  plain.find("6,5 olur. Bu normaldır. Yem gündə") != std::string::npos,
+              "citations: inline labels are stripped and the prose is tidied");
+
+        Chunk a;
+        a.kind = "pdf";
+        a.source = "pdfs/Aqronomiya.pdf";
+        a.page = 12;
+        Chunk b = a;                        // same file, same page -> one line
+        Chunk c = a;
+        c.source = "pdfs/Qaramal.pdf";
+        c.page = 4;
+        Chunk d;
+        d.kind = "web";
+        d.url = "https://fao.org/x";
+        const std::string block2 = build_sources_block({a, b, c, d});
+        check(count_of(block2, "- Aqronomiya.pdf, səh. 12") == 1 &&
+                  count_of(block2, "- Qaramal.pdf, səh. 4") == 1 &&
+                  count_of(block2, "- https://fao.org/x") == 1 &&
+                  block2.rfind("Mənbələr:", 0) == 0 &&
+                  count_of(block2, "\n- ") == 3,
+              "citations: one deduplicated source per line under Mənbələr:");
+    }
+
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
 }

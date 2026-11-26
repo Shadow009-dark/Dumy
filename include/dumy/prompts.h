@@ -23,7 +23,7 @@ inline const char* SYSTEM_PROMPT = R"SYSTEM(Siz kənd təsərrüfatı və maldar
 
 QAYDALAR:
 1. CAVAB KONTEKSTƏ ƏSASLANMALIDIR, AMMA KONTEKST MÜTLƏQ DEYİL: Verilən PDF və internet parçalarından istifadə edin. Əgər kontekstdə bu suala qismən də olsa cavab verən məlumat varsa, ondan istifadə edin və cavabı [Ümumi bilik] ilə tamamlayın. Yalnız o halda "Verilən mənbələrdə bu suala cavab tapılmadı" deyin ki, kontekstdə həqiqətən heç bir əlaqəli məlumat yoxdur. Heç bir fakt, rəqəm, doza, tarix və ya mənbə uydurma — amma PDF-də olan məlumatı təkrar danışmaq "uydurma" deyil.
-2. MƏNBƏ ETİKETLƏRİ: Hər iddia dərhal sonrası [Mənbə: fayl, səh. X], [İnternet: url] və ya [Ümumi bilik] etiketi ilə göstərin. Model-in özü yazdığı mənbə siyahısı ("İstifadə olunan mənbələr:", "Sources:") YAZMA.
+2. MƏNBƏ ETİKETLƏRİ: Hər iddia dərhal sonrası [Mənbə: fayl, səh. X], [İnternet: url] və ya [Ümumi bilik] etiketi ilə göstərin. Bu etiketləri proqram cavabın SONUNDA ayrıca "Mənbələr:" blokuna köçürür — ona görə mətndə mənbə siyahısı ("İstifadə olunan mənbələr:", "Sources:", sətir-sətir fayl adları) YAZMA və etiketləri bir daha təkrar etmə.
 3. DİL: Həmişə Azərbaycan dilində cavab ver (ə, ı, ş, ç, ğ, ö, ü hərfləri ilə). İstifadəçi başqa dildə yazsa, eyni dildə cavab ver.
 4. DIAQNOZ/ MÜALICƏ: Xəstəlik, simptom, doza və ya müalicə suallarında - dəqiq diaqnoz və müalicə üçün mütləq baytar həkimə / aqronoma müraciət edin. Heç vaxt dəqiq diaqnoz qoyma.
 5. RƏQƏMLƏR: Faiz dəyişməsi = (yeni-köhnə)/köhnə*100, işarəsi ilə (azalma mənfi). Kontekstdə olmayan rəqəmləri yazma. Hesablama üçün sualda olmayan dəyər (canlı çəki, günlük norma, faiz, doza) lazımdırsa: ya istifadəçidən soruş, ya da hər dəyəri ayrıca "Fərziyyə: ..." sətri ilə göstər. Sualdan və kontekstdən götürülməyən rəqəmə [Mənbə: ...] etiketi QOYMA; düsturu və vahidləri yaz (canlı çəki kq, norma % canlı çəki və ya kq/gün).
@@ -259,6 +259,72 @@ inline std::string strip_own_sources(const std::string& in) {
         if (out.size() == before) break;  // safety: always make progress
     }
     return trim(out);
+}
+
+// Citation labels are an internal protocol: the model tags a claimed fact so
+// the pipeline can tell which chunk supports it, but the user must never read
+// "[Mənbə: ...]" in the middle of a sentence. This strips every inline label
+// from the prose; build_sources_block() prints them once, at the end.
+inline std::string strip_inline_citations(const std::string& in) {
+    std::string out = in;
+    for (const char* open : {"[Mənbə: ", "[İnternet: ", "[Mənbə:", "[İnternet:"}) {
+        size_t pos = 0;
+        while ((pos = out.find(open, pos)) != std::string::npos) {
+            const size_t close = out.find(']', pos);
+            if (close == std::string::npos) { out.erase(pos); break; }
+            out.erase(pos, close - pos + 1);
+        }
+    }
+    for (;;) {
+        const size_t pos = out.find("[Ümumi bilik]");
+        if (pos == std::string::npos) break;
+        out.erase(pos, 14);
+    }
+    // Tidy what the removed label left behind: double spaces and a space
+    // before punctuation ("olur ." -> "olur.").
+    std::string tidy;
+    tidy.reserve(out.size());
+    for (size_t i = 0; i < out.size(); ++i) {
+        const char c = out[i];
+        if (c == ' ' && !tidy.empty() &&
+            (tidy.back() == ' ' || tidy.back() == '\n'))
+            continue;
+        if ((c == '.' || c == ',' || c == ';' || c == ':' || c == ')' || c == '!') &&
+            !tidy.empty() && tidy.back() == ' ')
+            tidy.pop_back();
+        tidy.push_back(c);
+    }
+    return trim(tidy);
+}
+
+// One source per line, de-duplicated, at most 8 lines:
+//   Mənbələr:
+//   - Qaramal.pdf, səh. 12
+//   - https://fao.org/...
+inline std::string build_sources_block(const std::vector<Chunk>& used) {
+    std::vector<std::string> lines;
+    for (const auto& c : used) {
+        std::string line;
+        if (c.kind == "web") {
+            const std::string u = c.url.empty() ? c.source : c.url;
+            if (u.empty()) continue;
+            line = "- " + u;
+        } else {
+            std::string name = c.source;
+            const size_t slash = name.find_last_of("/\\");
+            if (slash != std::string::npos) name = name.substr(slash + 1);
+            if (name.empty()) continue;
+            line = "- " + name;
+            if (c.page > 0) line += ", səh. " + std::to_string(c.page);
+        }
+        if (std::find(lines.begin(), lines.end(), line) == lines.end())
+            lines.push_back(line);
+        if (lines.size() >= 8) break;
+    }
+    if (lines.empty()) return std::string();
+    std::string out = "Mənbələr:";
+    for (const auto& l : lines) out += "\n" + l;
+    return out;
 }
 
 // Removes every occurrence of the exact safety line so the pipeline can add
