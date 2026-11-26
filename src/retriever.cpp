@@ -363,11 +363,17 @@ Retriever::StoreResult Retriever::retrieve_store(const std::vector<std::string>&
             sims.push_back(static_cast<float>(dot));
         }
         if (!sims.empty()) {
+            result.embedding_ok = true;
             std::sort(sims.begin(), sims.end(), std::greater<float>());
             result.max_score = sims.front();
             const size_t cut = std::min<size_t>(k > 0 ? k : 1, sims.size()) - 1;
             result.score_margin = sims.front() - sims[cut];
         }
+    }
+    if (!result.embedding_ok && !result.chunks.empty()) {
+        log_warn("retrieval: embeddings unavailable - BM25-only result (" +
+                 std::to_string(result.chunks.size()) +
+                 " chunk(s), no cosine score)");
     }
 
     return result;

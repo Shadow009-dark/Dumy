@@ -62,6 +62,9 @@ public:
         // ranking already separates the relevant head from the tail, so the
         // LLM rerank call can be skipped.
         float score_margin = 0.0f;
+        // False when /api/embed failed for every query: the result is BM25-only
+        // and max_score is meaningless, so the caller needs its own floor.
+        bool embedding_ok = false;
     };
     StoreResult retrieve_store(const std::vector<std::string>& queries,
                                size_t k) const;

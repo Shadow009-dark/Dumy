@@ -1571,6 +1571,31 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
              " margin=" + std::to_string(pdf_result.score_margin) +
              " chunks=" + std::to_string(pdf_chunks.size()));
 
+    // --- 3a. BM25-only mode needs its own floor ----------------------------
+    // When /api/embed fails (model evicted, small GPU) retrieval falls back to
+    // BM25 and max_score stays 0, so the cosine guard below cannot fire at all:
+    // the relevance floor silently disappears exactly when it is needed. In
+    // that mode require the question's key terms in the best hit instead.
+    if (!pdf_result.embedding_ok && !pdf_chunks.empty()) {
+        const std::vector<std::string> terms = relevance_key_terms(q);
+        size_t matched = 0;
+        for (const auto& t : terms) {
+            for (const auto& w : az_words(pdf_chunks.front().text)) {
+                if (az_words_match(t, w)) { ++matched; break; }
+            }
+        }
+        const size_t need = terms.empty() ? 1 : std::min<size_t>(2, terms.size());
+        if (terms.empty() || matched < need) {
+            log_warn("retrieval guard: BM25-only and the best hit matches " +
+                     std::to_string(matched) + "/" + std::to_string(terms.size()) +
+                     " key terms - PDF context dropped");
+            pdf_chunks.clear();
+        } else {
+            log_info("retrieval guard: BM25-only, best hit matches " +
+                     std::to_string(matched) + "/" + std::to_string(terms.size()) +
+                     " key terms - context kept");
+        }
+    }
     // Step 7: never attach unrelated PDF citations. When the best vector hit
     // is below min_score the matched chunks are noise (e.g. "Telefon nədir?"),
     // so the answer comes from general knowledge instead.
