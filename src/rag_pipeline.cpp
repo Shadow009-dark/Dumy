@@ -1336,21 +1336,14 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     // model is unreliable, so procedures/grammar/lists get a deterministic
     // refusal and simple facts/definitions get one short answer that must pass
     // the word-validity, subject and domain-drift checks.
-    // Tier 2 combo entries are specific enough to answer before retrieval.
     // The curated shortcut is for short, single-topic questions; a long or
     // test-format question must be answered by the RAG pipeline instead.
+    // common_sense.json stays the PRIMARY answer for those questions, but it
+    // no longer pre-empts retrieval: the entry is used at 4b, after the books
+    // have been searched, so a curated answer cannot stop retrieval from
+    // running (and its sources being known).
     const bool knowledge_shortcut_ok =
         !is_multiple_choice(q) && meaningful_word_count(q) <= 10;
-    if (cfg_.knowledge_enabled && knowledge_shortcut_ok) {
-        if (const KnowledgeEntry* ke = knowledge_.match_best(q)) {
-            res.answer = ke->answer;
-            res.qtype = "knowledge";
-            res.knowledge_ids.push_back(ke->id);
-            if (on_delta) on_delta(ke->answer);
-            log_info("knowledge: combo entry " + ke->id);
-            return res;
-        }
-    }
     if (!has_agri_keyword(q)) {
         // F7.1(b): outside the books - curated knowledge before any model call.
         if (cfg_.knowledge_enabled && knowledge_shortcut_ok) {
@@ -1801,16 +1794,23 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
         }
     }
 
-    // --- 4b. Tier 2 before generation, only when no chunk passed the gate ---
-    if (cfg_.knowledge_enabled && knowledge_shortcut_ok &&
-        (selected.empty() || pdf_relevance_failed)) {
-        if (const KnowledgeEntry* ke = knowledge_.match(q)) {
+    // --- 4b. Curated answer, after retrieval has run -----------------------
+    // The curated entry is still the primary answer for a short single-topic
+    // question (it is curated for exactly this), but it is applied here, once
+    // retrieval has done its work, instead of before it. match_best is tried
+    // first so a specific combo entry wins over a generic keyword entry.
+    if (cfg_.knowledge_enabled && knowledge_shortcut_ok) {
+        const KnowledgeEntry* best = knowledge_.match_best(q);
+        const KnowledgeEntry* ke = best ? best : knowledge_.match(q);
+        if (ke) {
             res.answer = ke->answer;
             res.qtype = "knowledge";
             res.knowledge_ids.push_back(ke->id);
             if (on_delta) on_delta(ke->answer);
-            arb_branch = "knowledge_pre";
-            log_info("knowledge_pre: " + ke->id);
+            arb_branch = "knowledge_post_retrieval";
+            log_info("knowledge: after retrieval " + ke->id +
+                     " (retrieval ran: " + std::to_string(pdf_chunks.size()) +
+                     " chunk(s), " + std::to_string(selected.size()) + " selected)");
             return res;
         }
     }
