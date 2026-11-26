@@ -398,18 +398,22 @@ inline std::string build_context_block(const std::vector<Chunk>& chunks) {
     return out;
 }
 
-// Finds labeled parts ("A)", "B.", "C:") at the start of a line in the
-// question so the model can be told exactly which parts to answer under their
-// own letter (rather than merging or dropping some).
+// Finds labeled parts ("A)", "B.", "C:", "a)", "1)") at the start of a line
+// in the question so the model can be told exactly which parts to answer under
+// their own letter (rather than merging or dropping some). Lowercase letters
+// are folded to uppercase so every caller sees one canonical label.
 inline std::vector<std::string> extract_part_labels(const std::string& q) {
     std::vector<std::string> labels;
     for (size_t i = 0; i < q.size(); ++i) {
-        const char c = q[i];
+        char c = q[i];
         const bool at_start = (i == 0) ||
                               (q[i - 1] == '\n') || (q[i - 1] == '\r') ||
                               (q[i - 1] == ' ') || (q[i - 1] == '\t');
-        if (at_start && c >= 'A' && c <= 'Z' && i + 1 < q.size() &&
-            (q[i + 1] == ')' || q[i + 1] == '.' || q[i + 1] == ':')) {
+        if (!at_start || i + 1 >= q.size()) continue;
+        const char next = q[i + 1];
+        if (next != ')' && next != '.' && next != ':') continue;
+        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+        if ((c >= 'A' && c <= 'Z') || (c >= '1' && c <= '9')) {
             labels.push_back(std::string(1, c));
             if (labels.size() >= 10) break;
         }
@@ -420,19 +424,27 @@ inline std::vector<std::string> extract_part_labels(const std::string& q) {
 // A test-format question (choose the one correct option) vs a parts question
 // ("...nələrdir? A) simptomlar B) müalicə C) profilaktika"): the letters look
 // the same, so the letters alone are not enough. A-D present means answers;
-// three options need an explicit choose-one cue.
+// three options need an explicit choose-one cue. Numbered options (1)-4)) are
+// the same shape as A)-D) and are read the same way.
 inline bool is_multiple_choice(const std::string& question) {
     const std::vector<std::string> labels = extract_part_labels(question);
     if (labels.size() < 3) return false;
     bool a = false, b = false, c = false, d = false;
+    bool n1 = false, n2 = false, n3 = false, n4 = false;
     for (const auto& l : labels) {
         if (l == "A") a = true;
         else if (l == "B") b = true;
         else if (l == "C") c = true;
         else if (l == "D") d = true;
+        else if (l == "1") n1 = true;
+        else if (l == "2") n2 = true;
+        else if (l == "3") n3 = true;
+        else if (l == "4") n4 = true;
     }
-    if (!(a && b && c)) return false;
-    if (d) return true;  // A), B), C), D) -> options to choose from
+    const bool letters = a && b && c;
+    const bool numbers = n1 && n2 && n3;
+    if (!letters && !numbers) return false;
+    if (d || n4) return true;  // A)-D) or 1)-4): options to choose from
     // Three options: only a test when the question asks to pick one.
     static const char* CUE[] = {"hansi", "duzgun", "secin", "sec", "dogru"};
     for (const auto& w : az_words(question))

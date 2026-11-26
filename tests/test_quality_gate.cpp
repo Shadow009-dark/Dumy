@@ -460,6 +460,22 @@ int main() {
               "code: generic \"proqram/kod\" needs a write verb, python still refused");
     }
 
+    // 34) Options are not always uppercase: "a) ... d)" and "1) ... 4)" are
+    //     test questions too. The rule itself is unchanged (three consecutive
+    //     labels plus a choose-one cue, or four labels), so the parts question
+    //     ("...nələrdir? A) ... B) ... C) ...") stays a parts question and
+    //     every part must still be answered.
+    {
+        check(is_multiple_choice("Aşağıdakılardan hansı düzgündür? a) X b) Y c) Z d) W") &&
+                  is_multiple_choice("Aşağıdakılardan hansı düzgündür? 1) X 2) Y 3) Z 4) W") &&
+                  is_multiple_choice("Hansı düzgündür? 1) X 2) Y 3) Z") &&
+                  is_multiple_choice("Aşağıdakılardan hansı düzgündür? A) X B) Y C) Z D) W") &&
+                  !is_multiple_choice("Mal-qarada qarayara xəstəliyinin əlamətləri nələrdir? "
+                                      "A) simptomlar B) müalicə C) qarşısının alınması") &&
+                  !is_multiple_choice("Aşağıdakılardan a) X b) Y c) Z"),
+              "mcq: lowercase and numbered options are tests, parts question is not");
+    }
+
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
 }
