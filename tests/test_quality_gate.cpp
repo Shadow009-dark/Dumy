@@ -479,6 +479,24 @@ int main() {
               "mcq: lowercase and numbered options are tests, parts question is not");
     }
 
+    // 35) Statements must reach fact-check mode, questions must not. The
+    //     command-verb list matched "de"/"yaz" as substrings, so "Delfinlər"
+    //     and "Yerdən" looked like commands and every "Title: fact" input was
+    //     answered as a question (8 suite failures: fact04/08/11/13/14,
+    //     gen04/06/10).
+    {
+        check(is_statement_input("Ayın məsafəsi: Ay Yerdən təxminən 384 000 kilometr uzaqdır.") &&
+                  is_statement_input("Delfinlər: Delfinlər məməlidir.") &&
+                  is_statement_input("Dəvələr suyu humpunda yağ kimi saxlayırlar.") &&
+                  !is_statement_input("Torpağın pH-ı nədir?") &&
+                  !is_statement_input("İnək gündə neçə dəfə sağılmalıdır") &&
+                  !is_statement_input("Su hansı temperaturda qaynayır") &&
+                  !is_statement_input("Bunu izah et") &&
+                  !is_statement_input("arilar haqqinda") &&
+                  !is_statement_input("ümumiyyətlə xəstəliklər haqqında"),
+              "statement: titled/plain facts are statements, questions and commands are not");
+    }
+
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
 }

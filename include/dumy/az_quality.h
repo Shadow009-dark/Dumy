@@ -806,35 +806,63 @@ inline bool is_statement_input(const std::string& q) {
     // A real question with a question mark is never a statement.
     if (q.find('?') != std::string::npos) return false;
 
-    const std::string f = az_fold(q);
+    const std::string f = " " + az_fold(q) + " ";
+    const std::vector<std::string> words = az_words(q);
 
     // Command verbs: user is asking us to DO something, not asserting a fact.
-    static const char* COMMAND_VERBS[] = {
+    // Single words are matched as WHOLE words: "de"/"yaz" as substrings made
+    // "Delfinlər" (de) and "Yerdən" (de) look like commands, so every
+    // "Title: fact" statement fell out of fact-check mode (8 suite failures).
+    static const char* COMMAND_WORDS[] = {
         "denen", "de", "deyin", "yaz", "yazin", "yazmaq",
-        "goster", "gosterin", "gosterebilersen",
-        "izah et", "izah edin",
+        "goster", "gosterin", "soyle", "soyleyin"
+    };
+    for (const auto& w : words) {
+        for (const char* v : COMMAND_WORDS)
+            if (w == v) return false;
+    }
+    // Multi-word requests and request formulas: safe as phrases.
+    static const char* COMMAND_PHRASES[] = {
+        "gosterebilersen", "izah et", "izah edin",
         "deyebilersen", "deyebilersiniz", "deyebilermisiniz",
         "zehemet olmasa", "zehmet olmasa",
-        "lutfen", "soyle", "soyleyin", "soyleyebilersen",
+        "lutfen", "soyleyebilersen",
         "cavab ver", "cavablandir",
         "mualice yollarini", "adini de", "adlarini de",
         "melumat ver", "melumatlandir"
     };
-    for (const char* v : COMMAND_VERBS) {
+    for (const char* v : COMMAND_PHRASES) {
         if (f.find(v) != std::string::npos) return false;
     }
 
-    // Short topic fragments like "arilar haqqinda" are statements of topic,
-    // not questions — but only if they contain no command verb (above).
-    // The real fact-check path is only for "X: Y" style input, e.g.
-    // "Title: statement" (colon within the first 50 characters).
+    // "X: Y" input, e.g. a titled fact or a task label: treat as a statement
+    // when the part BEFORE the colon is a short label and the part AFTER it is
+    // a full clause.
     const size_t colon = q.find(':');
     if (colon != std::string::npos && colon < 50) {
-        // Only treat as a statement if the part BEFORE the colon is short
-        // (a label) and the part AFTER the colon is a full clause.
         const std::string before = trim(q.substr(0, colon));
         const std::string after = trim(q.substr(colon + 1));
         if (before.size() <= 40 && after.size() >= 20) return true;
+    }
+
+    // Plain declarative statement ("Ay Yerdən təxminən 384 000 kilometr
+    // uzaqdır."): nothing to answer, everything to verify. A question without
+    // a '?' is kept out by its question word, so "Torpağın pH-ı nədir" and
+    // "İnək gündə neçə dəfə sağılmalıdır" still take the normal question path,
+    // and a short topic fragment ("ümumiyyətlə xəstəliklər haqqında", 3 words)
+    // stays a fragment instead of becoming a claim to fact-check.
+    if (words.size() >= 5) {
+        static const char* QUESTION_WORDS[] = {
+            "ne", "nece", "nedir", "niye", "hansi", "harada", "harda",
+            "haradir", "kim", "neler", "nelerdir", "hansilari", "qeder",
+            "vaxt", "zaman", "ucun", "lazim", "lazimdir", "etmeli",
+            "olar", "olarmi", "mumkundur", "qaydasi", "haqqinda",
+            "barede", "dair"
+        };
+        for (const auto& w : words)
+            for (const char* qw : QUESTION_WORDS)
+                if (w == qw) return false;
+        return true;
     }
 
     return false;
