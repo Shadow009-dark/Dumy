@@ -174,6 +174,8 @@ Not read on principle: `pdfs/*.pdf` (24 binaries, 120 MB), `metnler/*.txt` (7 fi
   ```
 - **Impact:** with bge-m3 down (or the model evicted on the 6 GB card) the bot still answers, but cites keyword-matched chunks with no similarity floor — the failure class `min_score` was introduced to prevent. The lexical relevance gate may still save it, but a single shared keyword is enough for `score_ok` (see 2.2).
 - **Suggested fix:** make the guard three-state: `embedding_ok ? (score < min_score) : (bm25_only → require the lexical gate unconditionally)`.
+- **Status (WAVE 3) — D5, FIXED:** `StoreResult` now carries `embedding_ok`, and in BM25-only mode the best hit must contain at least `min(2, terms)` of the question's key terms or the PDF context is dropped; the mode is logged (`retrieval: embeddings unavailable — BM25-only result …`, `retrieval guard: BM25-only, best hit matches 3/4 key terms — context kept`). Verified by pointing `models.embed` at a missing model: `query embedding failed: HTTP 404` on every question, the mastit question still answered with its sources, the off-domain question returned 0 sources.
+- **Status (WAVE 3) — D2, deliberately NOT applied: `common_sense.json` stays pre-emptive.** Reason: **latency with no quality gain.** Two discarded attempts showed that waiting for retrieval added 2-4 s of delay, and the retrieval results were discarded anyway because the curated answer was better. The curated Tier-2 entry therefore still answers before retrieval runs; the attempt (`f54392b`, step 4b) was reverted in `0cd6263`. Measured after the revert: "Toyuq yumurtasının inkubasiyası neçə gün çəkir?" → 60 ms cold / 14 ms warm, "21 gün".
 
 ## 1.7 [MEDIUM] [CONFIRMED] `src/rag_pipeline.cpp:662-673` and `src/reranker.cpp:39-50` — both skip paths bypass the 8/10 relevance filter
 - **Problem:** `rerank_or_trim` returns the cosine-ordered candidates whenever the top-1 margin is ≥ `rerank_skip_margin`, and `Reranker::rerank` returns the first `keep` candidates without any model call whenever `candidates.size() <= keep` (default `rerank_top_n` = 8). Neither path applies `rerank_min_score`, which is the only gate that drops weak chunks.
@@ -626,15 +628,15 @@ Not present in `config.json` but supported: `api_key` (empty by default), `uploa
 
 # SECTION 6 — TESTS, DOCS & BUILD
 
-## 6.1 [HIGH] [CONFIRMED code, SUSPECTED effect] `tests/run_all.ps1:2,18` — the regression suite declares `param()` twice
-- **Problem:** a second `param(…)` block appears at line 18, inside the script body. PowerShell only allows `param` as the first statement of a script; the rest of the file will not parse.
+## 6.1 [HIGH] [CONFIRMED, FIXED] `tests/run_all.ps1:2,18` — the regression suite declared `param()` twice
+- **Problem:** a second `param(…)` block appeared at line 18, inside the script body. **Correction:** this is not a parse error — the script parses and starts. The duplicate block is ordinary body text, so the script-level parameter set only contains `$Quick`, and the real failure is a **runtime parameter binding error**: every call that passes `-ReuseServer` (the harness's own documented mode, and every workflow that tests an already running server) aborts before the first test with "A parameter cannot be found that matches parameter name 'ReuseServer'".
 - **Evidence:**
   ```
   2:param([switch]$Quick)
   18:param([switch]$ReuseServer)
   ```
-- **Impact:** the only end-to-end suite in the repository most likely does not run at all (parse error before the first test), so every behaviour defended only by `tests/cases` is unprotected — including the 36/18 % and routing regressions in the backlog. **Could not verify** the exact error because running PowerShell scripts was excluded by the brief.
-- **Suggested fix:** one `param([switch]$Quick,[switch]$ReuseServer)` at line 1, then confirm the script runs end-to-end.
+- **Impact:** the only end-to-end suite in the repository cannot run in its reuse-server mode, so every behaviour defended only by `tests/cases` is unprotected — including the 36/18 % and routing regressions in the backlog. (**Verified later** by running the script.)
+- **Status:** fixed in `b167ce4` — one `param([switch]$Quick, [switch]$ReuseServer)` at line 2, no other change. The suite now runs end-to-end: 85/87 on `fix/species-guard` after wave 3 (the two failures, `q06` and `ui_static_safe`, are pre-existing and unrelated).
 
 ## 6.2 [MEDIUM] [CONFIRMED] `tools/run_regression.ps1` and `tests/regression/` do not exist
 - **Problem:** the brief and the README-era docs refer to them; the tree has neither. `tools/` contains only `cloudflared.exe` (untracked, `.gitignore:21`). The actual suite is `tests/run_all.ps1` plus `tests/cases/*.json` (48 files).
@@ -727,7 +729,7 @@ Not present in `config.json` but supported: `api_key` (empty by default), `uploa
 | 3 | 2.3 retrieved text is not delimited | Any PDF/web line can act as an instruction; the prompt's own defence is a no-op. |
 | 4 | 1.4 token estimate counts bytes | Roughly half the usable context is thrown away on every question. |
 | 5 | 2.1 "proqramı" refuses feeding programmes | A core agronomy topic is answered with "I only do agriculture". |
-| 6 | 6.1 `run_all.ps1` has two `param` blocks | The only end-to-end suite probably never runs — every other fix lands unverified. |
+| 6 | 6.1 `run_all.ps1` had two `param` blocks | Fixed in `b167ce4` (runtime parameter binding failure, not a parse error): the only end-to-end suite could not run with `-ReuseServer`. |
 | 7 | 1.12 BM25 rebuilt per file on full corpus | Ingest of 26 PDFs re-tokenises 7 045 chunks 26 times on a 6 GB machine. |
 | 8 | 2.5 MCQ detection misses lowercase/numbered options | Direct cause of "explains every option / Digər variantlar" on real quizzes. |
 | 9 | 1.6 `min_score` skipped when embeddings fail | The degraded mode (small GPU, model evicted) is exactly when the floor is needed. |
