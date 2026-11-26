@@ -994,6 +994,94 @@ inline std::string strip_meta_headers(std::string s) {
     return trim(s.substr(pos));
 }
 
+// --- Numeric-answer grounding ----------------------------------------------
+// "İnək gündə neçə saat gövşəyir?" retrieved a cattle page whose only number
+// describes oestrus ("orta hesabla 18 saat davam edən həvəsgəlmə"), and the
+// model reported that 18 as the rumination time. A question that asks for a
+// number may only be answered from a chunk that also names what is asked
+// about, so the caller drops the chunks that do not.
+//
+// "neçə" has to be read from the raw text: az_fold turns ç into c, so a folded
+// check cannot tell "neçə" (how many) from "necə" (how), and "necə
+// hazırlanır?" is not a numeric question.
+inline bool asks_for_number(const std::string& question) {
+    const std::string f = az_fold(question);
+    if (f.find("ne qeder") != std::string::npos) return true;   // nə qədər
+    if (f.find("muddet") != std::string::npos) return true;     // müddət
+    for (std::size_t i = 0; i + 6 <= question.size(); ++i) {
+        const char a = question[i];
+        const char b = question[i + 1];
+        if ((a != 'n' && a != 'N') || (b != 'e' && b != 'E')) continue;
+        if (static_cast<unsigned char>(question[i + 2]) != 0xC3 ||
+            static_cast<unsigned char>(question[i + 3]) != 0xA7)   // ç
+            continue;
+        if (static_cast<unsigned char>(question[i + 4]) != 0xC9 ||
+            static_cast<unsigned char>(question[i + 5]) != 0x99)   // ə
+            continue;
+        return true;
+    }
+    return false;
+}
+
+// The quantity, not its subject: "neçə saat", "neçə gündə", "neçə kq".
+inline bool is_quantity_word(const std::string& w) {
+    static const char* Q[] = {"nece", "ne", "qeder", "qederdir", "muddet",
+        "muddeti", "saat", "saatliq", "gun", "gune", "gunde", "gunluk",
+        "gundelik", "hefte", "heftelik", "ay", "ayliq", "il", "illik",
+        "defe", "dene", "eded", "kq", "kilo", "kiloqram", "qram", "ton",
+        "litr", "millilitr", "ml", "faiz", "derece", "santimetr", "metr",
+        "sm", "mm", "olcu", "miqdar", "norma"};
+    for (const char* q : Q)
+        if (w == q) return true;
+    return false;
+}
+
+// A livestock noun is in every chunk of a livestock corpus, so it cannot say
+// which chunk answers the question ("İnək" appears on the oestrus page too).
+inline bool is_species_word(const std::string& w) {
+    static const char* S[] = {"inek", "mal", "qara", "dana", "buzov", "quzu",
+        "qoyun", "keci", "at", "camis", "donuz", "toyuq", "cuce", "xoruz",
+        "ari", "balik", "heyvan", "malqara"};
+    for (const char* s : S)
+        if (w == s) return true;
+    return false;
+}
+
+// Generic predicates ("yeyir", "içir", "verir") say nothing about which
+// paragraph holds the number; only a specific noun does ("gövşəyir",
+// "doğulur", "boğaz"). Removing them keeps "Toyuq gündə neçə qram yem yeyir?"
+// on the old path instead of filtering it down to a verb alone.
+inline bool is_generic_verb(const std::string& w) {
+    static const char* V[] = {"yeyir", "yeyirler", "yeyilir", "yeyilib",
+        "yeyen", "icir", "icirler", "icilir", "icilib", "icen", "verir",
+        "verirler", "verilir", "verilib", "veren", "edir", "edirler",
+        "edilir", "edilib", "eden", "olur", "olurlar", "olunur", "olub"};
+    for (const char* v : V)
+        if (w == v) return true;
+    return false;
+}
+
+// Inflected forms change the tail (gövşəyir / gövşək), so compare the first
+// four folded letters, as the curated-knowledge matcher does.
+inline bool stem4_match(const std::string& a, const std::string& b) {
+    if (a.size() < 4 || b.size() < 4) return a == b;
+    return a.compare(0, 4, b, 0, 4) == 0;
+}
+
+// True when the text names every subject term (empty terms = no constraint).
+inline bool text_mentions_all(const std::string& text,
+                              const std::vector<std::string>& terms) {
+    if (terms.empty()) return true;
+    const std::vector<std::string> words = az_words(text);
+    for (const auto& t : terms) {
+        bool hit = false;
+        for (const auto& w : words)
+            if (stem4_match(t, w)) { hit = true; break; }
+        if (!hit) return false;
+    }
+    return true;
+}
+
 // "X neçə Y-dən ibarətdir?" is answered by the count alone. Models often add
 // an invented list after a colon ("8 planet: ... Zülal ..."), which then fails
 // the word check and turns a correct count into a refusal.

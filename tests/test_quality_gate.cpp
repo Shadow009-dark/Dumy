@@ -531,6 +531,47 @@ int main() {
               "citations: one deduplicated source per line under Mənbələr:");
     }
 
+    // 37) Numeric-answer grounding: a numeric question may only be answered
+    //     from a chunk that names its subject. "İnək gündə neçə saat
+    //     gövşəyir?" was answered "18 saat" from an oestrus page that shares
+    //     only "İnək" and "saat" with the question.
+    {
+        const std::string goves = "\u0130n\u0259k g\u00fcnd\u0259 ne\u00e7\u0259 saat g\u00f6v\u015f\u0259yir?";
+        check(asks_for_number(goves) &&
+                  asks_for_number("\u0130n\u0259k g\u00fcnd\u0259 n\u0259 q\u0259d\u0259r su i\u00e7ir?") &&
+                  asks_for_number("\u0130nkubasiya m\u00fcdd\u0259ti n\u0259dir?") &&
+                  !asks_for_number("Torpa\u011f\u0131n pH-\u0131 n\u0259dir?") &&
+                  !asks_for_number("\u0130n\u0259yin s\u00fcd\u00fc azal\u0131b, q\u0131zd\u0131rmas\u0131 var") &&
+                  !asks_for_number("\u018flif\u0259 nec\u0259 haz\u0131rlan\u0131r?"),
+              "numeric: ne\u00e7\u0259 / n\u0259 q\u0259d\u0259r / m\u00fcdd\u0259t are numeric, nec\u0259 and plain questions are not");
+
+        const std::vector<std::string> terms = numeric_subject_terms(goves);
+        const std::string oestrus =
+            "\u0130n\u0259kd\u0259 orta hesabla 18 saat davam ed\u0259n h\u0259v\u0259sg\u0259lm\u0259 21 g\u00fcnd\u0259n sonra t\u0259krarlan\u0131r.";
+        const std::string rumination =
+            "Uzun v\u0259 davaml\u0131 g\u00f6v\u015f\u0259k g\u0259tirm\u0259 heyvanlar\u0131n \u00f6zl\u0259rini rahat hiss etdiyi "
+            "zamanlarda ba\u015f verir; in\u0259kl\u0259rd\u0259 otlama, g\u00f6v\u015f\u0259k v\u0259 yatma ard\u0131c\u0131l g\u0259dir.";
+        check(terms.size() == 1 && terms[0] == "govseyir" &&
+                  !text_mentions_all(oestrus, terms) &&
+                  text_mentions_all(rumination, terms) &&
+                  text_mentions_all(oestrus, {}) &&
+                  is_quantity_word("saat") && is_species_word("inek") &&
+                  is_generic_verb("yeyir") && !is_generic_verb("govseyir"),
+              "numeric: the oestrus chunk is dropped, the rumination chunk is kept");
+
+        // A question that is left with only a generic predicate has no
+        // discriminating subject: the guard must skip it (empty terms),
+        // never refuse - "Toyuq g\u00fcnd\u0259 ne\u00e7\u0259 qram yem yeyir?" was answered
+        // correctly (60 qram) and must keep doing so.
+        check(numeric_subject_terms(
+                  "Toyuq g\u00fcnd\u0259 ne\u00e7\u0259 qram yem yeyir?").empty() &&
+                  numeric_subject_terms(
+                      "Qoyun g\u00fcnd\u0259 ne\u00e7\u0259 litr su i\u00e7ir?").empty() &&
+                  !numeric_subject_terms(
+                      "\u0130n\u0259k ne\u00e7\u0259 ay bo\u011faz qal\u0131r?").empty(),
+              "numeric: verb-only questions have no subject terms and are skipped");
+    }
+
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
 }

@@ -611,6 +611,19 @@ inline std::vector<std::string> relevance_key_terms(const std::string& question)
     return out;
 }
 
+// Subject terms of a numeric question: the key terms minus the quantity words
+// ("neçə", "saat", "gündə"), the livestock nouns that every chunk names, and
+// the generic predicates ("yeyir", "içir"). What is left is the thing the
+// number belongs to ("gövşəyir", "doğulur", "boğaz"). An empty result means
+// the question has no discriminating subject, and the caller skips the guard.
+inline std::vector<std::string> numeric_subject_terms(const std::string& question) {
+    std::vector<std::string> out;
+    for (const auto& t : relevance_key_terms(question))
+        if (!is_quantity_word(t) && !is_species_word(t) && !is_generic_verb(t))
+            out.push_back(t);
+    return out;
+}
+
 // Cheap yes/no check: does this snippet really answer this question? The
 // caller uses it only when lexical overlap already failed.
 inline std::string build_relevance_check_user_message(const std::string& question,
@@ -1262,6 +1275,11 @@ inline const char* OUT_OF_SCOPE_MESSAGE =
     "Bu mövzuda dəqiq məlumatım yoxdur. Mən aqronomiya, maldarlıq və baytarlıq "
     "üzrə ixtisaslaşmışam; resept, addım-addım təlimat və qrammatika qaydaları "
     "kimi mövzularda etibarlı cavab verə bilmirəm.";
+
+// A numeric question whose every retrieved chunk was about something else.
+// Saying so is better than reporting a number taken from the wrong paragraph.
+inline const char* NUMERIC_GROUNDING_MISS_MESSAGE =
+    "Kitablarda bu sual üçün dəqiq rəqəm tapılmadı.";
 
 inline const char* GARBLED_FALLBACK_MESSAGE =
     "Dəqiq cavab verə bilmədim: modelin cavabı etibarsız (qarışıq sözlərlə) "

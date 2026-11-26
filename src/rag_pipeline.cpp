@@ -1698,6 +1698,41 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
             pdf_relevance_failed = true;
         }
     }
+    // --- 3c. A numeric question needs its subject in the chunk -------------
+    // A chunk that shares only the animal or a unit word with the question can
+    // supply a number that belongs to something else: the oestrus page ("orta
+    // hesabla 18 saat davam edən həvəsgəlmə") answered "İnək gündə neçə saat
+    // gövşəyir?" because "18 saat" was the only number in the context.
+    // Non-numeric questions are untouched, and so are numeric questions whose
+    // subject terms disappear in the filter (only a verb such as "yeyir" left):
+    // those take the old path rather than being refused.
+    size_t numeric_dropped = 0;
+    if (asks_for_number(q) && !pdf_chunks.empty()) {
+        const std::vector<std::string> terms = numeric_subject_terms(q);
+        if (!terms.empty()) {
+            std::vector<Chunk> kept_chunks;
+            for (const auto& c : pdf_chunks) {
+                if (text_mentions_all(c.text, terms)) kept_chunks.push_back(c);
+                else ++numeric_dropped;
+            }
+            if (numeric_dropped > 0) {
+                log_info("numeric guard: subject=[" + join(terms, ",") + "] kept " +
+                         std::to_string(kept_chunks.size()) + " of " +
+                         std::to_string(pdf_chunks.size()) + " chunk(s)");
+                pdf_chunks = std::move(kept_chunks);
+            }
+        } else {
+            log_info("numeric guard: no discriminating subject - guard skipped");
+        }
+    }
+    if (numeric_dropped > 0 && pdf_chunks.empty()) {
+        res.answer = NUMERIC_GROUNDING_MISS_MESSAGE;
+        res.no_sources = true;
+        res.from_own_knowledge = true;
+        if (on_delta) on_delta(res.answer);
+        log_info("numeric guard: no chunk names the subject - numeric refusal");
+        return res;
+    }
     WebOut web_out;
     if (web_enabled) web_out = web_fut.get();
     const double ms_web = web_enabled ? t_parallel.ms() : 0.0;
