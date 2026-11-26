@@ -44,7 +44,7 @@
     "usda.gov",
     "europa.eu"
   ],
-  "token_chars_per_token": 2.6,
+  "token_chars_per_token": 2.5,
   "context_safety_margin": 160,
   "api_key": "",
   "allowed_origins": [

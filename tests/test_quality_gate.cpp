@@ -443,9 +443,12 @@ int main() {
     //     tracks characters: measured 2.51-2.64 per token).
     {
         const std::string diacritics = repeat("Ə", 26);  // 26 chars, 52 bytes
-        check(estimate_tokens_az(diacritics) == 10 && estimate_tokens_az("") == 0 &&
-                  estimate_tokens_az("Abcde", 2.6) == 2,
-              "tokens: counts UTF-8 characters, not bytes");
+        // 13 chars at the 2.5 default: ceil(5.2) = 6. The old 2.6 gave 5, i.e.
+        // it under-counted and let the packer overrun num_ctx.
+        check(estimate_tokens_az(diacritics) == 11 && estimate_tokens_az("") == 0 &&
+                  estimate_tokens_az("Abcde", 2.6) == 2 &&
+                  estimate_tokens_az("Abcdefghijklm") == 6,
+              "tokens: counts UTF-8 characters, rounds up at 2.5 chars/token");
     }
 
     // 33) "proqram" is also an everyday word: "yem proqramı" is a feeding

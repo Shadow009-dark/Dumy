@@ -704,7 +704,7 @@ std::vector<Chunk> RagPipeline::map_reduce_summarize(
     // Split into groups so each summary fits the context budget.
     const size_t budget = static_cast<size_t>(std::max(cfg_.context_budget_tokens, 800));
     const size_t total = total_tokens(
-        chunks, cfg_.token_chars_per_token > 0.0 ? cfg_.token_chars_per_token : 2.6);
+        chunks, cfg_.token_chars_per_token > 0.0 ? cfg_.token_chars_per_token : 2.5);
     size_t group_count = (total + budget - 1) / budget;
     if (group_count < 2) group_count = 2;
     if (group_count > 5) group_count = 5;
@@ -1382,7 +1382,7 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
                     conversations_->facts(mem.client), q,
                     static_cast<size_t>(cfg_.memory_injection_tokens),
                     cfg_.token_chars_per_token > 0.0 ? cfg_.token_chars_per_token
-                                                     : 2.6);
+                                                     : 2.5);
             }
             auto with_memory = [&](std::string prompt) {
                 if (memory_block.empty()) return prompt;
@@ -1486,7 +1486,7 @@ AnswerResult RagPipeline::answer_impl(const std::string& question,
     if (const char* tk = std::getenv("DUMY_TOPK")) {
         try { top_k = std::max(1, std::stoi(tk)); } catch (...) {}
     }
-    const double cpt = cfg_.token_chars_per_token > 0.0 ? cfg_.token_chars_per_token : 2.6;
+    const double cpt = cfg_.token_chars_per_token > 0.0 ? cfg_.token_chars_per_token : 2.5;
     const double ms_route = t_route.ms();
 
     // --- 2a2. follow-up rewrite --------------------------------------------

@@ -167,7 +167,7 @@ struct Config {
     int expansion_max_simple_words = 10;
 
     // --- Context budgeting (Phase 2) -------------------------------------
-    double token_chars_per_token = 2.6;  // conservative Azerbaijani estimate
+    double token_chars_per_token = 2.5;  // conservative Azerbaijani estimate
     int context_safety_margin = 160;     // extra tokens kept free
 
     // --- API exposure (Phase 8) ------------------------------------------

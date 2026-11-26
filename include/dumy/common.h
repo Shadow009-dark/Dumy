@@ -124,13 +124,16 @@ inline size_t estimate_tokens(const std::string& text) {
 // Conservative estimate for Azerbaijani prompt budgeting. Real tokenizers use
 // ~2.2-3.2 characters per token for this language; words*1.6 underestimated a
 // 4.3 k-token prompt as 1.2 k and let Ollama answer HTTP 400.
-inline size_t estimate_tokens_az(const std::string& text, double chars_per_token = 2.6) {
+inline size_t estimate_tokens_az(const std::string& text, double chars_per_token = 2.5) {
     if (text.empty()) return 0;
-    if (chars_per_token < 1.0) chars_per_token = 2.6;
+    if (chars_per_token < 1.0) chars_per_token = 2.5;
     // Count UTF-8 codepoints, not bytes: ə/ş/ğ/ı/ö/ü/ç are two bytes each, so
     // text.size() counted them twice and the context budget trimmed chunks
     // that actually fit. Measured against gemma3 prompt_eval_count, the real
-    // ratio is 2.5-2.6 characters per token, so 2.6 is right for characters.
+    // ratio is 2.51-2.64 characters per token. 2.5 (the low end) rounds the
+    // estimate UP on purpose: under-counting tokens packs too many chunks and
+    // Ollama then truncates the START of the prompt (the system prompt), which
+    // is worse than dropping a chunk that would have fit.
     size_t chars = 0;
     for (unsigned char c : text)
         if ((c & 0xC0) != 0x80) ++chars;
