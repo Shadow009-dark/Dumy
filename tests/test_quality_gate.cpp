@@ -437,6 +437,17 @@ int main() {
               "context: strict retry message is wrapped once, not twice");
     }
 
+    // 32) Token estimates count characters, not bytes: ə/ş/ğ/ı are two bytes
+    //     each, so the byte count over-estimated Azerbaijani text by ~11% and
+    //     the context budget trimmed chunks that fit (gemma3 prompt_eval_count
+    //     tracks characters: measured 2.51-2.64 per token).
+    {
+        const std::string diacritics = repeat("Ə", 26);  // 26 chars, 52 bytes
+        check(estimate_tokens_az(diacritics) == 10 && estimate_tokens_az("") == 0 &&
+                  estimate_tokens_az("Abcde", 2.6) == 2,
+              "tokens: counts UTF-8 characters, not bytes");
+    }
+
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
 }

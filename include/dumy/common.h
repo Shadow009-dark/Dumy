@@ -127,7 +127,14 @@ inline size_t estimate_tokens(const std::string& text) {
 inline size_t estimate_tokens_az(const std::string& text, double chars_per_token = 2.6) {
     if (text.empty()) return 0;
     if (chars_per_token < 1.0) chars_per_token = 2.6;
-    return static_cast<size_t>(std::ceil(static_cast<double>(text.size()) / chars_per_token));
+    // Count UTF-8 codepoints, not bytes: ə/ş/ğ/ı/ö/ü/ç are two bytes each, so
+    // text.size() counted them twice and the context budget trimmed chunks
+    // that actually fit. Measured against gemma3 prompt_eval_count, the real
+    // ratio is 2.5-2.6 characters per token, so 2.6 is right for characters.
+    size_t chars = 0;
+    for (unsigned char c : text)
+        if ((c & 0xC0) != 0x80) ++chars;
+    return static_cast<size_t>(std::ceil(static_cast<double>(chars) / chars_per_token));
 }
 
 // Removes byte sequences that are not valid UTF-8 (PDF/HTML extraction and
