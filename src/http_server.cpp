@@ -245,6 +245,18 @@ nlohmann::json notes_json(const AnswerResult& r) {
 
 }  // namespace
 
+bool is_local_request(const httplib::Request& req) {
+    // cloudflared, nginx and friends connect from 127.0.0.1 and add a
+    // forwarding header. Presence of ANY such header means the request came
+    // through a proxy, so the socket address is not proof of locality.
+    static const char* const kProxyHeaders[] = {"Cf-Connecting-Ip", "X-Forwarded-For",
+                                                "X-Real-Ip", "Forwarded", "Cf-Ray"};
+    for (const char* header : kProxyHeaders) {
+        if (!req.get_header_value(header).empty()) return false;
+    }
+    return is_loopback(req.remote_addr);
+}
+
 struct HttpServer::Impl {
     httplib::Server svr;
     std::thread thread;
@@ -626,7 +638,7 @@ bool HttpServer::start(std::string* err) {
     svr.Post("/ingest", [this](const httplib::Request& req, httplib::Response& res) {
         // Reindexing is an administrative action: localhost only, even when an
         // API key is configured.
-        if (!is_loopback(req.remote_addr)) {
+        if (!is_local_request(req)) {
             reply_json(req, res, 403, {{"error", "ingest yalnız localhost-dandır"}});
             return;
         }
@@ -666,7 +678,7 @@ bool HttpServer::start(std::string* err) {
 
     // --- POST /upload (multipart PDF) --------------------------------------
     svr.Post("/upload", [this](const httplib::Request& req, httplib::Response& res) {
-        if (!is_loopback(req.remote_addr)) {
+        if (!is_local_request(req)) {
             reply_json(req, res, 403,
                        {{"error", "upload yalnız localhost-dan icazəlidir "
                                   "(config.json: allow_upload_from_remote)"}});

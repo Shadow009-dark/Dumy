@@ -15,7 +15,17 @@
 #include "dumy/rag_pipeline.h"
 #include "dumy/session_manager.h"
 
+namespace httplib {
+struct Request;  // cpp-httplib declares it as a struct (must match for the mangled name)
+}  // namespace httplib
+
 namespace dumy {
+
+// True only when the socket is loopback AND no proxy/tunnel header is present.
+// A cloudflared (or any reverse proxy) request arrives from 127.0.0.1, so the
+// socket address alone cannot prove the caller is local; a forwarding header
+// therefore makes the request remote.
+bool is_local_request(const httplib::Request& req);
 
 class HttpServer {
 public:

@@ -6,15 +6,11 @@
 
 #include "dumy/common.h"
 #include "dumy/config.h"
+#include "dumy/http_server.h"
 #include "dumy/key_manager.h"
 
 namespace dumy {
 namespace {
-
-bool is_local(const std::string& addr) {
-    return addr == "127.0.0.1" || addr == "::1" || addr == "localhost" ||
-           starts_with(addr, "127.");
-}
 
 // Provider names / pasted keys may carry invalid UTF-8; never let a bad byte
 // turn a JSON reply into a thrown exception.
@@ -53,7 +49,7 @@ void error(const Config& cfg, const httplib::Request& req, httplib::Response& re
 // Local machine + (when configured) the server API key. Remote clients are
 // refused even if they know the key: this panel writes credentials.
 bool may_manage(const Config& cfg, const httplib::Request& req, httplib::Response& res) {
-    if (!is_local(req.remote_addr)) {
+    if (!is_local_request(req)) {
         error(cfg, req, res, 403, "API açarları yalnız bu kompüterdən idarə olunur");
         return false;
     }
