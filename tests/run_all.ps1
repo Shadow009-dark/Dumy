@@ -1,5 +1,5 @@
 ﻿# DUMY regression suite (PowerShell 5.1+, Windows)
-param([switch]$Quick)
+param([switch]$Quick, [switch]$ReuseServer)
 $env:DUMY_DEBUG_TRACE = "1"
 if ($Quick) { & (Join-Path $PSScriptRoot "quick.ps1"); exit $LASTEXITCODE }
 #
@@ -15,7 +15,7 @@ if ($Quick) { & (Join-Path $PSScriptRoot "quick.ps1"); exit $LASTEXITCODE }
 # Cases come from tests\expected\cases.json and every tests\cases\*.json file.
 # Writes test_results\latest.md and exits non-zero on any failure.
 
-param([switch]$ReuseServer)
+
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
